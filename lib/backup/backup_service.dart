@@ -154,9 +154,7 @@ class BackupService {
     final dataFile = archive.findFile('data.json');
     if (dataFile == null) throw BackupException('备份里缺少 data.json，可能不是薪迹的备份');
 
-    final content = dataFile.content;
-    final List<int> jsonBytes =
-        content is List<int> ? content : (content as InputStream).toUint8Array();
+    final List<int> jsonBytes = _archiveBytes(dataFile.content);
     final Map<String, dynamic> data = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
 
     // 图片先解压到私有目录，再回填绝对路径
@@ -170,8 +168,7 @@ class BackupService {
     for (final file in archive.files) {
       if (!file.isFile) continue;
       if (!file.name.startsWith('images/')) continue;
-      final raw = file.content;
-      final imgBytes = raw is List<int> ? raw : (raw as InputStream).toUint8Array();
+      final imgBytes = _archiveBytes(file.content);
       final baseName = p.basename(file.name);
       final newAbs = p.join(slipDir.path, 'r${restamp}_$baseName');
       await File(newAbs).writeAsBytes(imgBytes);
@@ -407,4 +404,18 @@ class BackupService {
         iv: enc.IV(Uint8List.fromList(ivBytes)));
     return Uint8List.fromList(plain);
   }
+}
+
+/// 把 `ArchiveFile.content` 统一转成字节数组。
+///
+/// 为什么需要这个函数：archive 3.x 的 `content` 是 dynamic 类型——
+/// 我们自己 new 出来的文件是 List<int>，而从 ZIP 里解出来的文件是
+/// `InputStream`（懒加载，读到哪算哪）。
+///
+/// 注意：`InputStream` 提供的转换方法是 `toUint8List()`，
+/// 不是 `toUint8Array()`——后者在这个版本里根本不存在，写了会编译失败。
+List<int> _archiveBytes(dynamic content) {
+  if (content is List<int>) return content;
+  if (content is InputStream) return content.toUint8List();
+  throw BackupException('备份文件内容无法解析');
 }
