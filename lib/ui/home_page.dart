@@ -1,0 +1,390 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/money.dart';
+import '../data/models.dart';
+import '../security/lock_service.dart';
+import '../state/app_state.dart';
+import '../stats/salary_stats.dart';
+import 'detail_page.dart';
+import 'import_page.dart';
+import 'lock_page.dart';
+import 'review_page.dart';
+import 'settings_page.dart';
+import 'theme.dart';
+import 'yearly_page.dart';
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  int _year = DateTime.now().year;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptLock());
+  }
+
+  /// 首次使用时引导开启应用锁（只弹一次，随时可跳过）
+  Future<void> _maybePromptLock() async {
+    final lock = context.read<LockService>();
+    if (lock.enabled || !lock.needsSetup) return;
+
+    final sp = await SharedPreferences.getInstance();
+    if (sp.getBool('lock_prompt_shown') == true) return;
+    await sp.setBool('lock_prompt_shown', true);
+    if (!mounted) return;
+
+    final goSetup = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('要不要加把锁？'),
+        content: const Text(
+          '工资条属于敏感数据。开启应用锁后，打开薪迹需要指纹或 PIN，'
+          '别人拿到你的手机也看不到工资明细。',
+          style: TextStyle(height: 1.6, fontSize: 14),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('以后再说')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('去设置')),
+        ],
+      ),
+    );
+
+    if (goSetup == true && mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SetupLockPage(allowSkip: false)),
+      );
+    }
+  }
+
+  Future<void> _open(Widget page) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    if (!mounted) return;
+    await context.read<AppState>().reload();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final years = state.years;
+    final year = years.contains(_year) ? _year : years.first;
+    final summary = StatsBuilder.buildYear(state.records, year);
+    final now = DateTime.now();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Row(
+          children: [
+            Icon(Icons.receipt_long_outlined, size: 22),
+            SizedBox(width: 8),
+            Text('薪迹'),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: '年度总览',
+            icon: const Icon(Icons.insights_outlined),
+            onPressed: () => _open(YearlyPage(year: year)),
+          ),
+          IconButton(
+            tooltip: '设置',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => _open(const SettingsPage()),
+          ),
+          const SizedBox(width: 4),
+        ],
+      ),
+      body: Column(
+        children: [
+          _yearBar(years, year),
+          _summaryStrip(summary),
+          if (year == now.year && summary.months[now.month - 1].isEmpty)
+            _missingBanner(now.month),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+              itemCount: 12,
+              itemBuilder: (context, index) {
+                final month = 12 - index;
+                // 当年的未来月份不显示
+                if (year == now.year && month > now.month) {
+                  return const SizedBox.shrink();
+                }
+                final m = summary.months[month - 1];
+                final prev = month > 1 ? summary.months[month - 2] : null;
+                return _monthCard(m, prev, year);
+              },
+            ),
+          ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _open(const ImportPage()),
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: const Text('导入工资条'),
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ 顶部区域
+
+  Widget _yearBar(List<int> years, int year) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      child: Row(
+        children: [
+          IconButton(
+            icon: const Icon(Icons.chevron_left),
+            onPressed: () => setState(() => _year = year - 1),
+          ),
+          Text('$year 年', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+          IconButton(
+            icon: const Icon(Icons.chevron_right),
+            onPressed: year < DateTime.now().year
+                ? () => setState(() => _year = year + 1)
+                : null,
+          ),
+          const Spacer(),
+          if (years.length > 1)
+            PopupMenuButton<int>(
+              tooltip: '切换年份',
+              icon: const Icon(Icons.unfold_more, size: 20),
+              onSelected: (y) => setState(() => _year = y),
+              itemBuilder: (_) => years
+                  .map((y) => PopupMenuItem(value: y, child: Text('$y 年')))
+                  .toList(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryStrip(YearSummary s) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: kSeed,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '本年实发合计',
+                  style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.8)),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  formatCents(s.totalNet),
+                  style: moneyStyle(size: 24, color: Colors.white),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _stripMini('工资', formatCents(s.totalMonthlyNet)),
+              const SizedBox(height: 3),
+              _stripMini('奖金', formatCents(s.totalExtraNet)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _stripMini(String label, String value) => Text(
+        '$label $value',
+        style: TextStyle(fontSize: 11.5, color: Colors.white.withOpacity(0.85)),
+      );
+
+  Widget _missingBanner(int month) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: kWarnBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0x33E9B949)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.error_outline, size: 17, color: Color(0xFF9A6B00)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              '$month 月还没录入。工资条一般一周就失效，记得及时截图导入。',
+              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B4E00), height: 1.45),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ 月份卡片
+
+  Widget _monthCard(MonthSummary m, MonthSummary? prev, int year) {
+    if (m.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(14),
+          onTap: () => _open(ReviewPage.create(year: year, month: m.month)),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFE6E8E6), style: BorderStyle.solid),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 44,
+                  child: Text('${m.month}月',
+                      style: const TextStyle(fontSize: 15, color: Color(0xFFB0B5B0))),
+                ),
+                const Text('未录入', style: TextStyle(fontSize: 13, color: Color(0xFFB0B5B0))),
+                const Spacer(),
+                const Icon(Icons.add, size: 18, color: Color(0xFFB0B5B0)),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    final monthlyNet = m.monthlyNet;
+    int? delta;
+    if (prev != null && prev.monthly.isNotEmpty && m.monthly.isNotEmpty) {
+      delta = monthlyNet - prev.monthlyNet;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
+        decoration: cardDecoration(),
+        child: Column(
+          children: [
+            // 卡片头：月份 + 该月合计 + 环比
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 13, 16, 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Text('${m.month}月',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                  if (m.hasMultiple) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: kInfoBg,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text('${m.monthly.length}笔',
+                          style: const TextStyle(fontSize: 10.5, color: kSeed)),
+                    ),
+                  ],
+                  const Spacer(),
+                  if (delta != null) ...[
+                    _deltaChip(delta),
+                    const SizedBox(width: 8),
+                  ],
+                  Text(
+                    formatCents(m.totalNet),
+                    style: moneyStyle(size: 17),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            // 每条记录一行（同月多笔：正常 + 补发 + 奖金）
+            for (final r in m.monthly) _recordRow(r),
+            for (final r in m.extras) _recordRow(r, isExtra: true),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _deltaChip(int delta) {
+    final up = delta > 0;
+    final color = delta == 0 ? const Color(0xFF9AA09A) : (up ? kUp : kDown);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(up ? Icons.arrow_upward : Icons.arrow_downward, size: 12, color: color),
+        Text(
+          formatCents(delta.abs(), withSymbol: false),
+          style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w500),
+        ),
+      ],
+    );
+  }
+
+  Widget _recordRow(PayRecord r, {bool isExtra = false}) {
+    return InkWell(
+      onTap: () => _open(DetailPage(recordId: r.id!)),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        child: Row(
+          children: [
+            Container(
+              width: 3,
+              height: 15,
+              decoration: BoxDecoration(
+                color: isExtra ? const Color(0xFFB45309) : kSeed,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 9),
+            Flexible(
+              child: Text(
+                isExtra ? (r.recordLabel ?? '其他收入') : '工资明细',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13.5, color: Color(0xFF4A4F4A)),
+              ),
+            ),
+            if (isExtra) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFDF1E7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text('额外',
+                    style: TextStyle(fontSize: 10, color: Color(0xFFB45309))),
+              ),
+            ],
+            const SizedBox(width: 10),
+            Text(
+              formatCents(r.netCents),
+              style: TextStyle(
+                fontSize: 13.5,
+                color: const Color(0xFF1B1C1B),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(width: 2),
+            const Icon(Icons.chevron_right, size: 16, color: Color(0xFFC4C9C4)),
+          ],
+        ),
+      ),
+    );
+  }
+}

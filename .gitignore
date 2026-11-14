@@ -1,0 +1,28 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+.metadata
+dist/
+
+# Android
+android/local.properties
+
+# 签名文件：故意【不】忽略。
+#   原因：GitHub Actions 每次编译都要用它，签名必须永远一致，
+#        否则手机无法覆盖升级（只能卸载重装 → 本地工资数据全丢）。
+#   前提：本仓库必须是 Private。
+#        若要改成 Public，请先看 GITHUB打包指南.md「进阶：改用 Secrets」。
+# android/key.properties
+# android/app/keystore/*.jks
+
+*.apk
+*.aab
+
+# 系统
+.DS_Store
+Thumbs.db
