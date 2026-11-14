@@ -8,7 +8,7 @@ on:
   push:
     branches: [main, master]
     paths-ignore:
-      - '**.md'
+      - '**/*.md'
       - '.gitignore'
 
 # 创建 Release 需要写权限
@@ -57,6 +57,7 @@ jobs:
           #   手写容易和当前 Flutter 版本对不上。所以让 flutter 生成一份官方模板，
           #   再用 --ignore-existing 只补缺失文件，绝不覆盖仓库里已调好的配置
           #   （app/build.gradle.kts、AndroidManifest.xml、MainActivity.kt）。
+          rm -rf /tmp/scaffold
           flutter create --platforms=android --org com.xinji --project-name payslip /tmp/scaffold
           rsync -a --ignore-existing /tmp/scaffold/android/ android/
           echo ""

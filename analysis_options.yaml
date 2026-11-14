@@ -1,0 +1,9 @@
+# 静态检查规则
+# 说明：CI 里跑 flutter analyze 时只作为提示，不会中断打包
+#      （workflow 里配了 --no-fatal-infos --no-fatal-warnings）
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # OCR 解析里会用 print 打调试日志，不当错误处理
+    avoid_print: ignore

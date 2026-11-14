@@ -26,6 +26,28 @@
 
 ---
 
+## 怎么变成能装到手机上的 App
+
+**推荐：GitHub 云端打包，电脑不用装任何开发环境。**
+
+```bash
+# 1. 在 GitHub 建一个 Private 空仓库，名字随便（下面以 xinji 为例）
+# 2. 推到仓库
+git remote add origin https://github.com/你的用户名/xinji.git
+git push -u origin main
+# 3. 打开 https://github.com/你的用户名/xinji/actions → 左边「打包 APK」→ Run workflow
+# 4. 等 10 分钟，手机浏览器打开下面这个固定链接直接下载安装
+#    https://github.com/你的用户名/xinji/releases/latest/download/xinji.apk
+```
+
+完整步骤、报错对照表、签名与 Secrets 说明见 **[GITHUB打包指南.md](GITHUB打包指南.md)**。
+
+也可以在自己电脑上编译（要装 JDK 17 + Flutter + Android SDK，约 10GB），步骤见 [打包指南.md](打包指南.md)——**不是必需**，除非你想离线改代码。
+
+> 更新版本时**直接覆盖安装，不要卸载**。卸载会连本地数据库和原图一起删掉。
+
+---
+
 ## 二、目录结构
 
 ```
@@ -65,7 +87,17 @@ xinji/
 │       ├── settings_page.dart        设置 + 项目模板管理
 │       ├── lock_page.dart            解锁 / 设置锁 / 找回 PIN
 │       └── widgets/image_viewer.dart 原图查看
-└── 打包指南.md                       环境搭建到出 APK 的完整步骤
+├── android/                          Android 工程配置（云构建用）
+│   ├── app/build.gradle.kts          minSdk 23、包名、签名、关混淆
+│   ├── app/src/main/AndroidManifest.xml  应用名、生物识别权限、无网络权限
+│   ├── app/src/main/kotlin/.../MainActivity.kt  FlutterFragmentActivity（指纹必需）
+│   ├── app/keystore/xinji.jks        签名文件（改动会导致不能覆盖安装）
+│   └── key.properties                签名密码
+├── .github/workflows/build-apk.yml   ★ GitHub Actions 自动打包
+├── analysis_options.yaml             静态检查规则
+├── test/core_logic_test.dart         核心算法测试（合并 / 金额 / 系数）
+├── GITHUB打包指南.md                 ★ 手机拿到 APK 的最快路径（推荐）
+└── 打包指南.md                       本地装环境自己编译（备选）
 ```
 
 ---
