@@ -26,3 +26,6 @@ android/local.properties
 # 系统
 .DS_Store
 Thumbs.db
+
+# 本地辅助脚本，不上传
+push-to-github.bat
