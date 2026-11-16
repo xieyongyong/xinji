@@ -256,7 +256,7 @@ class UpdateDownloadService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("薪迹 v$version 已下载完成")
             .setContentText("点这里安装，数据会原样保留")
             .setContentIntent(install)

@@ -26,7 +26,7 @@ import java.io.FileOutputStream
  * 库的 [OcrConfig.DetConfig.modelPath] 支持相对 assets 的路径，会自己复制到
  * cacheDir；这里有两点坑：
  *  1. 它的 copyAssetToCache 不会创建父目录 → 必须给**平铺文件名**，
- *     所以我们自己先把 assets/ppocr/*.onnx 复制到 cacheDir 顶层
+ *     所以我们自己先把 assets/ppocr 下的 .onnx 复制到 cacheDir 顶层
  *  2. recKeysPath 走 Files.newInputStream(绝对路径)，不认 assets 相对路径
  *     → 字典也必须自己复制一份
  *
