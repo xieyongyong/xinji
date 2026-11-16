@@ -98,6 +98,27 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk dist/xinji.apk
           ls -lh dist/
 
+      - name: 检查安装包内容（模型 / 原生库）
+        run: |
+          echo "APK 字节数: $(stat -c%s dist/xinji.apk)"
+          echo "== assets/ppocr =="
+          unzip -l dist/xinji.apk | grep -E "assets/ppocr" || echo "  （没有）"
+          echo "== 各 ABI 的 so 合计 =="
+          unzip -l dist/xinji.apk | grep -E "lib/[a-zA-Z0-9_-]+/.*\.so" \
+            | awk '{split($4,p,"/"); s[p[2]]+=$1} END {for (k in s) printf "  %-14s %.1fMB\n", k, s[k]/1048576}' | sort
+          echo "== onnxruntime =="
+          unzip -l dist/xinji.apk | grep -E "libonnxruntime" || echo "  （没有）"
+
+          # 模型没进包的话，装上就等于没有 PP-OCR，直接拦下来，别发出去
+          if ! unzip -l dist/xinji.apk | grep -q "assets/ppocr/rec.onnx"; then
+            echo "::error::PP-OCR 模型没打进 APK（assets/ppocr 缺失）"
+            exit 1
+          fi
+          if ! unzip -l dist/xinji.apk | grep -q "libonnxruntime4j_jni.so"; then
+            echo "::error::onnxruntime 原生库没打进 APK"
+            exit 1
+          fi
+
       - name: 上传构建产物（保留 30 天）
         uses: actions/upload-artifact@v4
         with:
