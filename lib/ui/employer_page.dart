@@ -299,7 +299,6 @@ class _EmployerEditDialogState extends State<_EmployerEditDialog> {
   }
 
   Future<void> _pick({required bool isStart}) async {
-    final now = DateTime.now();
     final r = await showDialog<DateTime>(
       context: context,
       builder: (_) => _YearMonthDialog(
