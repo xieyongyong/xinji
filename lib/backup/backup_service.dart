@@ -185,6 +185,8 @@ class BackupService {
         (data['salary_templates'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final templateFields =
         (data['template_fields'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    // v3 备份才有雇主；老备份读出来是 null
+    final employers = (data['employers'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
     await db.transaction((txn) async {
       // 全量替换：先清空，再按原 id 插回，保证外键关系不变
@@ -193,13 +195,40 @@ class BackupService {
       await txn.delete('pay_image');
       await txn.delete('pay_record');
       await txn.delete('item_template');
+      await txn.delete('employer');
+
+      for (final e in employers) {
+        await txn.insert('employer', _sanitize(e, const {
+          'id', 'name', 'start_year', 'start_month', 'end_year', 'end_month',
+          'sort_order', 'created_at',
+        }));
+      }
+
+      // 老备份没有雇主信息：补一家并把记录全挂上去，
+      // 否则恢复完所有记录都会因为没有 employer_id 而在首页"消失"
+      int? fallbackEmployerId;
+      if (employers.isEmpty) {
+        fallbackEmployerId = await txn.insert('employer', {
+          'name': '我的公司',
+          'sort_order': 0,
+          'created_at': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+      final employerRows = await txn.query('employer',
+          columns: ['id'], orderBy: 'id ASC', limit: 1);
+      final int? anyEmployerId =
+          employerRows.isEmpty ? null : employerRows.first['id'] as int;
 
       for (final r in records) {
-        await txn.insert('pay_record', _sanitize(r, const {
-          'id', 'period_year', 'period_month', 'record_type', 'record_label',
-          'gross_cents', 'deduction_cents', 'net_cents', 'extra',
+        final m = _sanitize(r, const {
+          'id', 'employer_id', 'period_year', 'period_month', 'record_type',
+          'record_label', 'gross_cents', 'deduction_cents', 'net_cents', 'extra',
           'created_at', 'updated_at',
-        }));
+        });
+        if (m['employer_id'] == null) {
+          m['employer_id'] = fallbackEmployerId ?? anyEmployerId;
+        }
+        await txn.insert('pay_record', m);
       }
 
       for (final it in items) {
@@ -278,6 +307,7 @@ class BackupService {
     final infos = await db.query('record_info');
     final salaryTemplates = await db.query('salary_template');
     final templateFields = await db.query('template_field');
+    final employers = await db.query('employer');
 
     final images = <Map<String, dynamic>>[];
     for (final row in imageRows) {
@@ -293,7 +323,7 @@ class BackupService {
 
     return {
       'app': 'xinji',
-      'version': 2,
+      'version': 3,
       'exported_at': DateTime.now().toIso8601String(),
       'records': records.map((e) => Map<String, dynamic>.from(e)).toList(),
       'items': items.map((e) => Map<String, dynamic>.from(e)).toList(),
@@ -304,6 +334,7 @@ class BackupService {
           salaryTemplates.map((e) => Map<String, dynamic>.from(e)).toList(),
       'template_fields':
           templateFields.map((e) => Map<String, dynamic>.from(e)).toList(),
+      'employers': employers.map((e) => Map<String, dynamic>.from(e)).toList(),
     };
   }
 
@@ -322,7 +353,13 @@ class BackupService {
     final buf = StringBuffer();
     // BOM：不加这 3 个字节，Excel 打开中文会乱码
     buf.write('\uFEFF');
-    buf.writeln('年份,月份,记录类型,记录说明,项目,分类,金额,系数');
+    final employerName = <int, String>{};
+    for (final e in ((data['employers'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>()) {
+      employerName[e['id'] as int] = (e['name'] as String?) ?? '';
+    }
+
+    buf.writeln('年份,月份,雇主,记录类型,记录说明,项目,分类,金额,系数');
 
     for (final it in items) {
       final rec = recordInfo[it['record_id'] as int?];
@@ -335,6 +372,7 @@ class BackupService {
       buf.writeln([
         rec['period_year'],
         rec['period_month'],
+        _csv(employerName[rec['employer_id'] as int?] ?? ''),
         type,
         _csv(label),
         _csv((it['name'] as String?) ?? ''),
@@ -352,11 +390,20 @@ class BackupService {
 
     final buf = StringBuffer();
     buf.write('\uFEFF');
-    buf.writeln('年份,月份,记录类型,记录说明,应发合计,代扣合计,实发,录入笔数');
+    final employerName = <int, String>{};
+    for (final e in ((data['employers'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>()) {
+      employerName[e['id'] as int] = (e['name'] as String?) ?? '';
+    }
 
+    buf.writeln('年份,月份,雇主,记录类型,记录说明,应发合计,代扣合计,实发,录入笔数');
+
+    // 分组键必须带上雇主：两家公司在同一个月各发一次工资，
+    // 不带雇主就会被合并成一行，金额凭空翻倍
     final grouped = <String, List<Map<String, dynamic>>>{};
     for (final r in records) {
-      final key = '${r['period_year']}-${r['period_month']}-${r['record_type']}';
+      final key = '${r['employer_id']}-${r['period_year']}-'
+          '${r['period_month']}-${r['record_type']}';
       grouped.putIfAbsent(key, () => []).add(r);
     }
 
@@ -364,9 +411,10 @@ class BackupService {
       ..sort((a, b) {
         final pa = a.split('-');
         final pb = b.split('-');
-        final y = int.parse(pb[0]) - int.parse(pa[0]);
+        // key = 雇主-年-月-类型
+        final y = int.parse(pb[pb.length - 3]) - int.parse(pa[pa.length - 3]);
         if (y != 0) return y;
-        return int.parse(pb[1]) - int.parse(pa[1]);
+        return int.parse(pb[pb.length - 2]) - int.parse(pa[pa.length - 2]);
       });
 
     for (final k in keys) {
@@ -378,6 +426,7 @@ class BackupService {
       buf.writeln([
         first['period_year'],
         first['period_month'],
+        _csv(employerName[first['employer_id'] as int?] ?? ''),
         first['record_type'] == 'monthly' ? '月度工资' : '其他收入',
         _csv((first['record_label'] as String?) ?? ''),
         _plain(gross),

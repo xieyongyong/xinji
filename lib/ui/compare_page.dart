@@ -41,7 +41,9 @@ class _ComparePageState extends State<ComparePage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final summary = StatsBuilder.buildYear(state.records, _year);
+    // 只在当前雇主内部比：跨公司比月度环比没有意义
+    final summary = StatsBuilder.buildYear(state.scopedRecords, _year);
+    final employerName = state.currentEmployer?.name;
     final available = summary.months.where((m) => m.monthly.isNotEmpty).toList();
 
     if (available.length < 2) {
@@ -93,7 +95,19 @@ class _ComparePageState extends State<ComparePage> {
     final cmp = StatsBuilder.compare(a, b);
 
     return Scaffold(
-      appBar: AppBar(title: Text('$_year 年 · 月份对比')),
+      appBar: AppBar(
+        title: Text('$_year 年 · 月份对比'),
+        bottom: employerName == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(20),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(employerName,
+                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A))),
+                ),
+              ),
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
         children: [

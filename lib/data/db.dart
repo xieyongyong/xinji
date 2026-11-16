@@ -18,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 3,
+      version: 4,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -33,6 +33,7 @@ class AppDb {
     await db.execute('''
       CREATE TABLE pay_record (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employer_id INTEGER,
         period_year INTEGER NOT NULL,
         period_month INTEGER NOT NULL,
         record_type TEXT NOT NULL DEFAULT 'monthly',
@@ -90,8 +91,10 @@ class AppDb {
     ''');
 
     await _createV2Tables(db);
+    await _createV4Tables(db);
     await _seedTemplates(db);
     await _seedDefaultSalaryTemplate(db);
+    await _seedDefaultEmployer(db);
   }
 
   /// v2 新增的三张表。
@@ -150,6 +153,96 @@ class AppDb {
       // v3：基本绩效改为「推算值」（它不在应发里，早年被当成收入会多算一遍）
       await _migrateV3(db);
     }
+    if (oldVersion < 4) {
+      // v4：多雇主档案（跳槽后新旧工资条并存、互不干扰）
+      await _migrateV4(db);
+    }
+  }
+
+  /// v4 新增：雇主表。新库、老库共用同一段 SQL。
+  static Future<void> _createV4Tables(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS employer (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        start_year INTEGER,
+        start_month INTEGER,
+        end_year INTEGER,
+        end_month INTEGER,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+  }
+
+  /// 字段是否已存在（SQLite 没有 ADD COLUMN IF NOT EXISTS，只能自己查）
+  static Future<bool> _hasColumn(Database db, String table, String column) async {
+    final rows = await db.rawQuery('PRAGMA table_info($table)');
+    for (final r in rows) {
+      if (r['name'] == column) return true;
+    }
+    return false;
+  }
+
+  /// v4 迁移：给所有历史记录挂上「第一家雇主」。
+  ///
+  /// 名字尽量从数据里猜：工资条上的「业务单位」最接近真实雇主。
+  /// 猜不到才用「原雇主」兜底 —— 用户可以在「雇主档案」里改名。
+  /// 关键点：**所有老记录都要挂上**，一条都不能漏。
+  /// 漏掉的记录在"只看当前雇主"的视图里会彻底消失，那是最坏的结果。
+  static Future<void> _migrateV4(Database db) async {
+    await _createV4Tables(db);
+    if (!await _hasColumn(db, 'pay_record', 'employer_id')) {
+      await db.execute('ALTER TABLE pay_record ADD COLUMN employer_id INTEGER');
+    }
+
+    final existing = await db.query('employer', columns: ['id'], limit: 1);
+    int? employerId = existing.isEmpty ? null : existing.first['id'] as int;
+
+    if (employerId == null) {
+      employerId = await db.insert('employer', {
+        'name': await _guessEmployerName(db),
+        'sort_order': 0,
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
+
+    await db.update('pay_record', {'employer_id': employerId},
+        where: 'employer_id IS NULL');
+  }
+
+  /// 从历史数据里猜一个像样的雇主名
+  static Future<String> _guessEmployerName(Database db) async {
+    try {
+      final rows = await db.rawQuery(
+        "SELECT value, COUNT(*) AS c FROM record_info "
+        "WHERE name = '业务单位' AND TRIM(COALESCE(value,'')) <> '' "
+        "GROUP BY value ORDER BY c DESC LIMIT 1",
+      );
+      if (rows.isNotEmpty) {
+        var v = (rows.first['value'] as String? ?? '').trim();
+        // "生产运营一中心-奔图电子" → "奔图电子"：短一点更像公司名
+        if (v.contains('-')) {
+          final last = v.split('-').last.trim();
+          if (last.length >= 2) v = last;
+        }
+        if (v.isNotEmpty && v.length <= 20) return v;
+      }
+    } catch (_) {
+      // 表不存在或数据异常都无所谓，走兜底
+    }
+    return '原雇主';
+  }
+
+  /// 首次安装预置一家雇主，避免录入时"没得选"
+  static Future<void> _seedDefaultEmployer(Database db) async {
+    final existing = await db.query('employer', columns: ['id'], limit: 1);
+    if (existing.isNotEmpty) return;
+    await db.insert('employer', {
+      'name': '我的公司',
+      'sort_order': 0,
+      'created_at': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   /// v3 迁移：只改「解释方式」，不动用户数据。

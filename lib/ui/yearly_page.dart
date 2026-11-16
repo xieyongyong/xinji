@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/money.dart';
+import '../data/employer.dart';
 import '../state/app_state.dart';
 import '../stats/salary_stats.dart';
 import 'compare_page.dart';
@@ -31,7 +32,7 @@ class _YearlyPageState extends State<YearlyPage> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final years = state.years;
-    final summary = StatsBuilder.buildYear(state.records, _year);
+    final summary = StatsBuilder.buildYear(state.scopedRecords, _year);
 
     return Scaffold(
       appBar: AppBar(
@@ -87,12 +88,90 @@ class _YearlyPageState extends State<YearlyPage> {
             const SizedBox(height: 14),
             _extraCard(summary),
           ],
+          if (state.employers.length > 1) ...[
+            const SizedBox(height: 14),
+            _employerBreakdown(state),
+          ],
         ],
       ),
     );
   }
 
   // ------------------------------------------------------------ 卡片
+
+  /// 分雇主合计。
+  ///
+  /// 为什么要单独一块：跳槽那年"全年总收入"到底是多少，
+  /// 只有在跨雇主的口径下才看得出来；但各家的项目结构不同，
+  /// 所以这里只汇总金额，不做明细对比。
+  Widget _employerBreakdown(AppState state) {
+    final rows = <MapEntry<Employer, int>>[];
+    for (final e in state.employers) {
+      final list = state.records
+          .where((r) => r.employerId == e.id && r.periodYear == _year)
+          .toList();
+      if (list.isEmpty) continue;
+      rows.add(MapEntry(e, list.fold(0, (s, r) => s + r.netCents)));
+    }
+    if (rows.isEmpty) return const SizedBox.shrink();
+    final total = rows.fold(0, (s, r) => s + r.value);
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+      decoration: cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('$_year 年 · 分雇主合计',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              Text(formatCents(total),
+                  style: moneyStyle(size: 14, color: const Color(0xFF3A3F3A))),
+            ],
+          ),
+          const SizedBox(height: 8),
+          for (final row in rows)
+            InkWell(
+              onTap: () => state.switchEmployer(row.key.id!),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 13,
+                      decoration: BoxDecoration(
+                        color: row.key.id == state.currentEmployerId
+                            ? kSeed
+                            : const Color(0xFFD6DAD6),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        row.key.name +
+                            (row.key.id == state.currentEmployerId ? '（当前）' : ''),
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF3A3F3A)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    Text(formatCents(row.value),
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+            ),
+          const SizedBox(height: 4),
+          const Text('点击可切换过去查看该雇主的明细',
+              style: TextStyle(fontSize: 10.5, color: Color(0xFFB0B5B0))),
+        ],
+      ),
+    );
+  }
 
   Widget _totalCard(YearSummary s) {
     return Container(

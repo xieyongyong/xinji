@@ -8,11 +8,15 @@ import 'package:path_provider/path_provider.dart';
 
 import 'ocr_models.dart';
 
-/// 一张图的识别结果
-class RecognizedText {
+/// 一张图的识别结果。
+///
+/// 名字**不能**叫 RecognizedText —— google_mlkit_text_recognition 里正好有
+/// 一个同名类型（processImage 的返回值），一旦同名就会把官方类型遮蔽掉，
+/// 编译期报 "isn't a type"。这里用 OcrText，跟官方彻底错开。
+class OcrText {
   final List<RawLine> lines;
   final String fullText;
-  RecognizedText(this.lines, this.fullText);
+  OcrText(this.lines, this.fullText);
 }
 
 /// OCR 失败（可直接展示给用户的中文原因）
@@ -60,7 +64,7 @@ class OcrService {
   }
 
   /// 识别一张图，返回带坐标的文本片段
-  Future<RecognizedText> recognizeFile(String path) async {
+  Future<OcrText> recognizeFile(String path) async {
     final file = File(path);
     if (!await file.exists()) {
       throw OcrException('图片文件不存在，可能已被系统清理');
@@ -122,7 +126,7 @@ class OcrService {
       await Future<void>.delayed(Duration.zero);
     }
 
-    return RecognizedText(_dedupeOverlap(lines), textParts.join('\n'));
+    return OcrText(_dedupeOverlap(lines), textParts.join('\n'));
   }
 
   /// 按宽度与总像素双重限制缩小（只缩不放）
@@ -144,7 +148,7 @@ class OcrService {
   ///
   /// 为什么不用 InputImage.fromBytes：那条路要求传原始像素格式（nv21/bgra8888），
   /// 得自己转换格式，反而更容易出错；写临时文件多一次磁盘 IO 但最稳。
-  Future<RecognizedText> _recognizeJpegBytes(List<int> bytes, {required int index}) async {
+  Future<OcrText> _recognizeJpegBytes(List<int> bytes, {required int index}) async {
     Directory? tmpDir;
     File? tmpFile;
     try {
@@ -163,31 +167,37 @@ class OcrService {
     }
   }
 
-  Future<RecognizedText> _recognizeSingleFile(String path) async {
+  Future<OcrText> _recognizeSingleFile(String path) async {
     final input = InputImage.fromFilePath(path);
-    final TextRecognitionResult result;
+    final lines = <RawLine>[];
+    final text = StringBuffer();
+
+    // 注意：这里**不能**写 `final TextRecognitionResult result;`。
+    // 这个包的返回类型在版本之间换过名字（`TextRecognitionResult` 在
+    // 0.13 里根本不存在），写死名字会在 CI 上直接编译失败；
+    // 交给类型推断就没有这个风险。
     try {
-      result = await _engine.processImage(input);
+      final result = await _engine.processImage(input);
+      for (final block in result.blocks) {
+        for (final line in block.lines) {
+          final t = line.text.trim();
+          if (t.isEmpty) continue;
+          final rect = line.boundingBox;
+          lines.add(RawLine(
+            text: t,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+          ));
+        }
+      }
+      text.write(result.text);
     } catch (e) {
       throw OcrException('文字识别失败：$e');
     }
 
-    final lines = <RawLine>[];
-    for (final block in result.blocks) {
-      for (final line in block.lines) {
-        final text = line.text.trim();
-        if (text.isEmpty) continue;
-        final rect = line.boundingBox;
-        lines.add(RawLine(
-          text: text,
-          left: rect.left,
-          top: rect.top,
-          right: rect.right,
-          bottom: rect.bottom,
-        ));
-      }
-    }
-    return RecognizedText(lines, result.text);
+    return OcrText(lines, text.toString());
   }
 
   /// 去掉分块重叠区被重复识别的行。

@@ -43,6 +43,18 @@ class DetailPage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text('${record.periodYear}年${record.periodMonth}月'),
+        bottom: state.employerById(record.employerId) == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(20),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    state.employerById(record.employerId)!.name,
+                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A)),
+                  ),
+                ),
+              ),
         actions: [
           IconButton(
             tooltip: '编辑',

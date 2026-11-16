@@ -1,8 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/db.dart';
+import '../data/employer.dart';
+import '../data/employer_dao.dart';
 import '../data/models.dart';
 import '../data/record_dao.dart';
 import '../data/salary_template.dart';
@@ -29,10 +32,19 @@ class AppState extends ChangeNotifier {
   late RecordDao recordDao;
   late TemplateDao templateDao;
   late SalaryTemplateDao salaryTemplateDao;
+  late EmployerDao employerDao;
   final OcrService ocr = OcrService();
 
   List<PayRecord> records = [];
   List<ItemTemplate> templates = [];
+
+  /// 雇主档案（跳槽后新旧工资条并存）
+  List<Employer> employers = [];
+
+  /// 当前在看哪家公司的数据。持久化，下次打开还是它。
+  int? currentEmployerId;
+
+  static const String _kCurrentEmployer = 'current_employer_id';
 
   /// 发薪模板（可多套，仅一套生效）
   List<SalaryTemplate> salaryTemplates = [];
@@ -48,9 +60,34 @@ class AppState extends ChangeNotifier {
     recordDao = RecordDao(db);
     templateDao = TemplateDao(db);
     salaryTemplateDao = SalaryTemplateDao(db);
+    employerDao = EmployerDao(db);
+
+    employers = await employerDao.loadAll();
+    if (employers.isEmpty) {
+      // 理论上建库时已经预置了一家；万一被删光，补一家回来，
+      // 否则录入页没有任何雇主可选
+      final id = await employerDao.insert(Employer(name: '我的公司'));
+      employers = await employerDao.loadAll();
+      if (employers.isEmpty) {
+        throw StateError('雇主初始化失败');
+      }
+      await employerDao.assignOrphans(employers.first.id ?? id);
+    } else {
+      // 兜底：没挂雇主的记录归到第一家，绝不让数据在筛选视图里"消失"
+      await employerDao.assignOrphans(employers.first.id!);
+    }
+
+    await _restoreCurrentEmployer();
     await reload();
     loading = false;
     notifyListeners();
+  }
+
+  Future<void> _restoreCurrentEmployer() async {
+    final sp = await SharedPreferences.getInstance();
+    final saved = sp.getInt(_kCurrentEmployer);
+    final valid = employers.any((e) => e.id == saved);
+    currentEmployerId = valid ? saved : employers.first.id;
   }
 
   Future<void> reload() async {
@@ -58,14 +95,85 @@ class AppState extends ChangeNotifier {
     templates = await templateDao.loadAll();
     salaryTemplates = await salaryTemplateDao.loadAll();
     activeSalaryTemplate = await salaryTemplateDao.activeTemplate();
+    employers = await employerDao.loadAll();
+    // 当前雇主被删了要兜住，否则所有筛选视图都会变成空白
+    if (employers.isNotEmpty && !employers.any((e) => e.id == currentEmployerId)) {
+      currentEmployerId = employers.first.id;
+    }
     notifyListeners();
   }
 
+  // ------------------------------------------------------------ 雇主
+
+  Employer? get currentEmployer {
+    for (final e in employers) {
+      if (e.id == currentEmployerId) return e;
+    }
+    return employers.isEmpty ? null : employers.first;
+  }
+
+  Employer? employerById(int? id) {
+    if (id == null) return null;
+    for (final e in employers) {
+      if (e.id == id) return e;
+    }
+    return null;
+  }
+
+  /// 当前雇主名下的记录（首页/年度/对比都只看这份）
+  List<PayRecord> get scopedRecords {
+    final id = currentEmployer?.id;
+    if (id == null) return records;
+    return records.where((r) => r.employerId == id).toList();
+  }
+
+  Future<void> switchEmployer(int id) async {
+    if (currentEmployerId == id) return;
+    currentEmployerId = id;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kCurrentEmployer, id);
+  }
+
+  /// 录入某个月时，默认该选哪家：
+  /// 优先"当前雇主且该月在职"，其次"该月在职的任一家"，最后当前雇主
+  Employer? employerForPeriod(int year, int month) {
+    final cur = currentEmployer;
+    if (cur != null && cur.covers(year, month)) return cur;
+    for (final e in employers) {
+      if (e.covers(year, month)) return e;
+    }
+    return cur;
+  }
+
+  Future<void> addEmployer(Employer e) async {
+    await employerDao.insert(e);
+    await reload();
+  }
+
+  Future<void> updateEmployer(Employer e) async {
+    await employerDao.update(e);
+    await reload();
+  }
+
+  /// 删除雇主。它名下的记录必须先迁到 [moveTo]，否则一律拒绝删除。
+  Future<void> deleteEmployer(int id, {required int moveTo}) async {
+    if (id == moveTo) throw ArgumentError('不能迁移到自己');
+    final wasCurrent = currentEmployerId == id;
+    await employerDao.moveRecords(id, moveTo);
+    await employerDao.delete(id);
+    await reload();
+    // reload 会把"已失效的当前雇主"重置成第一家，所以这里按删除前的状态补一刀
+    if (wasCurrent) await switchEmployer(moveTo);
+  }
+
+  Future<int> countRecordsOf(int employerId) => employerDao.countRecords(employerId);
+
   // ------------------------------------------------------------ 查询
 
-  /// 所有出现过的年份（倒序），用于年份切换
+  /// 所有出现过的年份（倒序），用于年份切换。只统计当前雇主。
   List<int> get years {
-    final set = records.map((e) => e.periodYear).toSet().toList();
+    final set = scopedRecords.map((e) => e.periodYear).toSet().toList();
     set.sort((a, b) => b.compareTo(a));
     if (set.isEmpty) set.add(DateTime.now().year);
     // 保证当年一定在列表里，方便录入新一年的数据
@@ -75,10 +183,10 @@ class AppState extends ChangeNotifier {
   }
 
   List<PayRecord> recordsOfYear(int year) =>
-      records.where((e) => e.periodYear == year).toList();
+      scopedRecords.where((e) => e.periodYear == year).toList();
 
   /// 某年某月的所有记录（同月可能多笔：正常发放 + 补发）
-  List<PayRecord> recordsOfMonth(int year, int month) => records
+  List<PayRecord> recordsOfMonth(int year, int month) => scopedRecords
       .where((e) => e.periodYear == year && e.periodMonth == month)
       .toList();
 
@@ -98,7 +206,7 @@ class AppState extends ChangeNotifier {
 
     for (var i = 0; i < filePaths.length; i++) {
       final path = filePaths[i];
-      final RecognizedText recognized;
+      final OcrText recognized;
       try {
         recognized = await ocr.recognizeFile(path);
       } on OcrException catch (e) {

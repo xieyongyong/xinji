@@ -32,6 +32,13 @@ const String kFieldInfo = 'info';
 /// 这样换公司、加工资条格式都不用改表结构。
 class PayRecord {
   final int? id;
+
+  /// 这笔钱是哪家公司发的。
+  ///
+  /// 跳槽后必须区分，否则年度合计会把两家公司的收入加在一起，
+  /// 月度环比也会跨公司比较——都不成立。
+  final int? employerId;
+
   final int periodYear;
   final int periodMonth;
   final String recordType;
@@ -61,6 +68,7 @@ class PayRecord {
 
   PayRecord({
     this.id,
+    this.employerId,
     required this.periodYear,
     required this.periodMonth,
     required this.recordType,
@@ -91,6 +99,7 @@ class PayRecord {
 
   Map<String, Object?> toMap() => {
         if (id != null) 'id': id,
+        'employer_id': employerId,
         'period_year': periodYear,
         'period_month': periodMonth,
         'record_type': recordType,
@@ -115,6 +124,7 @@ class PayRecord {
     }
     return PayRecord(
       id: m['id'] as int?,
+      employerId: m['employer_id'] as int?,
       periodYear: (m['period_year'] as int?) ?? 0,
       periodMonth: (m['period_month'] as int?) ?? 1,
       recordType: (m['record_type'] as String?) ?? kTypeMonthly,
@@ -130,6 +140,7 @@ class PayRecord {
 
   PayRecord copyWith({
     int? id,
+    int? employerId,
     int? periodYear,
     int? periodMonth,
     String? recordType,
@@ -145,6 +156,7 @@ class PayRecord {
   }) {
     return PayRecord(
       id: id ?? this.id,
+      employerId: employerId ?? this.employerId,
       periodYear: periodYear ?? this.periodYear,
       periodMonth: periodMonth ?? this.periodMonth,
       recordType: recordType ?? this.recordType,

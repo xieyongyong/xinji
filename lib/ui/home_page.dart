@@ -4,11 +4,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/app_settings.dart';
 import '../core/money.dart';
+import '../data/employer.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
 import '../state/app_state.dart';
 import '../stats/salary_stats.dart';
 import 'detail_page.dart';
+import 'employer_page.dart';
 import 'import_page.dart';
 import 'lock_page.dart';
 import 'review_page.dart';
@@ -25,6 +27,9 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int _year = DateTime.now().year;
+
+  /// 上一次看到的雇主，用来判断"是不是刚切了雇主"
+  int? _lastEmployerId;
 
   @override
   void initState() {
@@ -75,9 +80,23 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final years = state.years;
-    final year = years.contains(_year) ? _year : years.first;
-    final summary = StatsBuilder.buildYear(state.records, year);
+
+    // 刚切换雇主时，把年份跳到它最近的记录年份。
+    // 为什么不在 build 里无脑判断"今年有没有数据"：那样用户想翻到一个
+    // 还没录入的年份时会被立刻弹回来，没法录新一年的第一条。
+    final employerId = state.currentEmployer?.id;
+    if (_lastEmployerId != employerId) {
+      _lastEmployerId = employerId;
+      _year = state.scopedRecords.isNotEmpty
+          ? state.scopedRecords.first.periodYear
+          : DateTime.now().year;
+    }
+    final year = _year;
+    final summary = StatsBuilder.buildYear(state.scopedRecords, year);
     final now = DateTime.now();
+    final employer = state.currentEmployer;
+    // 已经离职的雇主不该再提醒"这个月还没录入"
+    final stillActive = employer == null || employer.covers(now.year, now.month);
 
     return Scaffold(
       appBar: AppBar(
@@ -104,9 +123,10 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Column(
         children: [
+          if (state.employers.length > 1) _employerBar(state),
           _yearBar(years, year),
           _summaryStrip(summary),
-          if (year == now.year && summary.months[now.month - 1].isEmpty)
+          if (stillActive && year == now.year && summary.months[now.month - 1].isEmpty)
             _missingBanner(now.month),
           Expanded(
             child: ListView.builder(
@@ -135,6 +155,52 @@ class _HomePageState extends State<HomePage> {
   }
 
   // ------------------------------------------------------------ 顶部区域
+
+  /// 雇主切换。只有一家时不显示 —— 没有可切的东西，白占一行。
+  Widget _employerBar(AppState state) {
+    return SizedBox(
+      height: 40,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+        itemCount: state.employers.length + 1,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          if (i == state.employers.length) {
+            return GestureDetector(
+              onTap: () => _open(const EmployerPage()),
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 2),
+                child: Icon(Icons.tune, size: 18, color: Color(0xFF9AA09A)),
+              ),
+            );
+          }
+          final Employer e = state.employers[i];
+          final selected = e.id == state.currentEmployerId;
+          return GestureDetector(
+            onTap: () => state.switchEmployer(e.id!),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: selected ? kSeed : const Color(0xFFF2F4F2),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Center(
+                child: Text(
+                  e.name,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: selected ? Colors.white : const Color(0xFF5A5F5A),
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   Widget _yearBar(List<int> years, int year) {
     return Padding(

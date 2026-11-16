@@ -12,6 +12,7 @@ import '../data/db.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
 import '../state/app_state.dart';
+import 'employer_page.dart';
 import 'lock_page.dart';
 import 'salary_template_page.dart';
 import 'theme.dart';
@@ -366,6 +367,23 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
+              _sectionTitle('雇主'),
+              _card([
+                _item(
+                  icon: Icons.business_outlined,
+                  title: '雇主档案',
+                  subtitle: state.employers.length <= 1
+                      ? '只有一家；换工作后在这里新增，旧工资条不受影响'
+                      : '共 ${state.employers.length} 家，当前：'
+                          '${state.currentEmployer?.name ?? '未设置'}',
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const EmployerPage()),
+                    );
+                  },
+                ),
+              ]),
+              const SizedBox(height: 18),
               _sectionTitle('项目'),
               _card([
                 _item(
@@ -430,7 +448,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _card([
                 _item(
                   icon: Icons.info_outline,
-                  title: '薪迹 1.0.0',
+                  title: '薪迹 1.3.0',
                   subtitle: '记录 ${state.records.length} 条',
                 ),
                 const Divider(height: 1),

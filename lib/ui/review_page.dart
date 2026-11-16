@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../core/app_settings.dart';
 import '../core/money.dart';
+import '../data/employer.dart';
 import '../data/models.dart';
 import '../data/salary_template.dart';
 import '../ocr/merge_engine.dart';
@@ -78,6 +79,9 @@ class _ReviewPageState extends State<ReviewPage> {
   late int _month;
   late String _recordType;
 
+  /// 这笔记录属于哪家雇主（跳槽后新旧工资条并存的关键维度）
+  int? _employerId;
+
   final _labelCtrl = TextEditingController();
   final _grossCtrl = TextEditingController();
   final _deductionCtrl = TextEditingController();
@@ -102,6 +106,11 @@ class _ReviewPageState extends State<ReviewPage> {
     _month = widget.initialMonth;
     _recordType = widget.initialRecordType;
     _labelCtrl.text = widget.initialLabel;
+
+    // 0) 雇主：编辑时用记录自带的，新建时按"该月份在哪家在职"自动选
+    final appState = context.read<AppState>();
+    _employerId = widget.editing?.employerId ??
+        appState.employerForPeriod(_year, _month)?.id;
 
     // 1) 编辑模式：直接回填已有数据
     final editing = widget.editing;
@@ -334,6 +343,15 @@ class _ReviewPageState extends State<ReviewPage> {
       setState(() {
         _year = result.year;
         _month = result.month;
+        // 换了月份后原来的雇主可能不在职了（比如改到上一家公司期间），
+        // 自动跟着走——只在新建时做，编辑已有记录不擅自改动
+        if (!_isEdit) {
+          final state = context.read<AppState>();
+          final cur = state.employerById(_employerId);
+          if (cur == null || !cur.covers(_year, _month)) {
+            _employerId = state.employerForPeriod(_year, _month)?.id;
+          }
+        }
       });
     }
   }
@@ -452,6 +470,7 @@ class _ReviewPageState extends State<ReviewPage> {
 
     final record = PayRecord(
       id: widget.editing?.id,
+      employerId: _employerId,
       periodYear: _year,
       periodMonth: _month,
       recordType: _recordType,
@@ -479,6 +498,10 @@ class _ReviewPageState extends State<ReviewPage> {
       } else {
         await state.insertRecord(record, ordered, _images, infos);
       }
+      // 保存后把视图切到这条记录所属的雇主，
+      // 否则用户回到首页看不到刚录的这条，会以为"没存上"
+      final empId = _employerId;
+      if (empId != null) await state.switchEmployer(empId);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -727,6 +750,38 @@ class _ReviewPageState extends State<ReviewPage> {
     );
   }
 
+  /// 发薪雇主。只有一家时不做成下拉，避免点出个没选项的菜单。
+  Widget _employerTile() {
+    final state = context.watch<AppState>();
+    final employers = state.employers;
+    final current = state.employerById(_employerId);
+    if (employers.length <= 1) {
+      return ListTile(
+        title: const Text('发薪雇主', style: TextStyle(fontSize: 14)),
+        trailing: Text(
+          current?.name ?? '未设置',
+          style: const TextStyle(fontSize: 14, color: Color(0xFF8A8F8A)),
+        ),
+      );
+    }
+    return ListTile(
+      title: const Text('发薪雇主', style: TextStyle(fontSize: 14)),
+      trailing: DropdownButton<int>(
+        value: employers.any((e) => e.id == _employerId) ? _employerId : null,
+        underline: const SizedBox.shrink(),
+        hint: const Text('选择', style: TextStyle(fontSize: 14)),
+        style: const TextStyle(fontSize: 14, color: Color(0xFF1B1C1B)),
+        items: employers
+            .map((Employer e) => DropdownMenuItem<int>(
+                  value: e.id,
+                  child: Text(e.name, style: const TextStyle(fontSize: 14)),
+                ))
+            .toList(),
+        onChanged: (v) => setState(() => _employerId = v),
+      ),
+    );
+  }
+
   Widget _periodCard() {
     return Container(
       decoration: cardDecoration(),
@@ -744,6 +799,8 @@ class _ReviewPageState extends State<ReviewPage> {
             ),
             onTap: _pickPeriod,
           ),
+          const Divider(height: 1),
+          _employerTile(),
           const Divider(height: 1),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
