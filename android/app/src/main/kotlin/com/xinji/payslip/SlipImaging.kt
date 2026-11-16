@@ -68,7 +68,8 @@ object SlipImaging {
         maxWidth: Int,
         quality: Int,
         outDir: String,
-        tag: String
+        tag: String,
+        clean: Boolean = true
     ): List<Map<String, Any>> {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(path, bounds)
@@ -125,15 +126,25 @@ object SlipImaging {
 
             // 去掉浅灰水印：只影响「送给 OCR 的分块」，归档图（compress）保持原样，
             // 用户想回看原始截图时水印还在，不会被我们改掉。
-            val cleaned = TileCleaner.clean(bmp)
-            if (cleaned.bitmap !== bmp) {
-                bmp.recycle()
-                bmp = cleaned.bitmap
+            // 设置里可以关掉：极少数情况下它会把很浅的小字也一起刷白。
+            val cleanSummary: String
+            if (clean) {
+                val cleaned = TileCleaner.clean(bmp)
+                if (cleaned.bitmap !== bmp) {
+                    bmp.recycle()
+                    bmp = cleaned.bitmap
+                }
+                cleanSummary = cleaned.summary
+            } else {
+                cleanSummary = "已关闭"
             }
 
-            val file = File(dir, "${tag}_$index.jpg")
+            // 用 **PNG 无损** 送识别，而不是 JPEG。
+            // 分块是要交给 OCR 的：JPEG 的块效应会让笔画粘连、小数点糊成逗号，
+            // 而这些都是临时文件（识别完立刻删），多占的几百 KB 完全值得。
+            val file = File(dir, "${tag}_$index.png")
             FileOutputStream(file).use { fos ->
-                bmp.compress(Bitmap.CompressFormat.JPEG, quality, fos)
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
                 fos.flush()
             }
 
@@ -145,7 +156,7 @@ object SlipImaging {
                     "width" to bmp.width,
                     "height" to bmp.height,
                     // 去水印的结果摘要，写进 ocr_trace.log 便于按日志调阈值
-                    "clean" to cleaned.summary
+                    "clean" to cleanSummary
                 )
             )
 

@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_settings.dart';
 import '../core/crash_log.dart';
 import '../data/models.dart';
 import '../ocr/ocr_service.dart';
 import '../state/app_state.dart';
 import 'review_page.dart';
 import 'theme.dart';
+import 'widgets/period_picker.dart';
 
 /// 导入入口：选图 / 拍照 / 手动
 class ImportPage extends StatefulWidget {
@@ -24,6 +26,37 @@ class _ImportPageState extends State<ImportPage> {
   bool _busy = false;
   String _busyText = '';
   final ImagePicker _picker = ImagePicker();
+
+  /// 这笔工资属于哪个月：默认当前月，用户可先改好再选图
+  late int _year;
+  late int _month;
+
+  /// 用户是否**手动**改过月份。
+  ///
+  /// 改过就以他为准；没动过则识别出工资条标题上的月份后自动采用 ——
+  /// 没截到标题的月份截图也能正确归月，不用用户自己算。
+  bool _periodPicked = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _year = now.year;
+    _month = now.month;
+  }
+
+  Future<void> _pickPeriod() async {
+    final r = await showDialog<({int year, int month})>(
+      context: context,
+      builder: (_) => PeriodPickerDialog(year: _year, month: _month),
+    );
+    if (r == null || !mounted) return;
+    setState(() {
+      _year = r.year;
+      _month = r.month;
+      _periodPicked = true;
+    });
+  }
 
   // ------------------------------------------------------------ 选图
 
@@ -68,6 +101,7 @@ class _ImportPageState extends State<ImportPage> {
     });
 
     final state = context.read<AppState>();
+    final settings = context.read<AppSettings>();
     final originals = <String>[];
     final paths = <String>[];
 
@@ -76,7 +110,11 @@ class _ImportPageState extends State<ImportPage> {
         if (!mounted) return;
         setState(() => _busyText = '正在处理第 ${i + 1}/${files.length} 张…');
         originals.add(files[i].path);
-        paths.add(await state.importImage(files[i], i));
+        paths.add(await state.importImage(
+          files[i],
+          i,
+          compress: settings.compressImages,
+        ));
       }
     } catch (e) {
       _error('保存图片失败：$e');
@@ -90,7 +128,11 @@ class _ImportPageState extends State<ImportPage> {
     String? failReason;
     try {
       // 识别读原图（字最清楚），记录里存归档副本（私有的、不会被系统清掉）
-      outcome = await state.recognizeImages(originals, keepPaths: paths);
+      outcome = await state.recognizeImages(
+        originals,
+        keepPaths: paths,
+        deWatermark: settings.deWatermark,
+      );
     } catch (e) {
       failReason = e is OcrException ? e.message : '$e';
       CrashLog.note('识别失败：$failReason');
@@ -125,8 +167,8 @@ class _ImportPageState extends State<ImportPage> {
       final saved = await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => ReviewPage.create(
-            year: DateTime.now().year,
-            month: DateTime.now().month,
+            year: _year,
+            month: _month,
             recordType: _recordType,
             imagePaths: paths,
           ),
@@ -141,6 +183,9 @@ class _ImportPageState extends State<ImportPage> {
         builder: (_) => ReviewPage.fromOutcome(
           outcome: outcome!,
           recordType: _recordType,
+          fallbackYear: _year,
+          fallbackMonth: _month,
+          honorDetectedPeriod: !_periodPicked,
         ),
       ),
     );
@@ -174,7 +219,9 @@ class _ImportPageState extends State<ImportPage> {
                 selected: {_recordType},
                 onSelectionChanged: (s) => setState(() => _recordType = s.first),
               ),
-              const SizedBox(height: 22),
+              const SizedBox(height: 16),
+              _periodCard(),
+              const SizedBox(height: 18),
               _bigAction(
                 icon: Icons.photo_library_outlined,
                 title: '从相册选择',
@@ -194,12 +241,11 @@ class _ImportPageState extends State<ImportPage> {
                   onPressed: _busy
                       ? null
                       : () async {
-                          final now = DateTime.now();
                           final saved = await Navigator.of(context).push<bool>(
                             MaterialPageRoute(
                               builder: (_) => ReviewPage.create(
-                                year: now.year,
-                                month: now.month,
+                                year: _year,
+                                month: _month,
                                 recordType: _recordType,
                               ),
                             ),
@@ -242,6 +288,40 @@ class _ImportPageState extends State<ImportPage> {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  /// 归属月份。
+  ///
+  /// 为什么要在"选图之前"就让它可见：工资条是分几张截的，
+  /// 月份只写在标题那一张上，用户选图前根本想不起来对不对；
+  /// 把月份摆在最上面，他顺手就能改，也不至于存完才发现记到别的月了。
+  Widget _periodCard() {
+    return InkWell(
+      onTap: _busy ? null : _pickPeriod,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        decoration: cardDecoration(),
+        child: Row(
+          children: [
+            const Icon(Icons.event_note_outlined, size: 20, color: kSeed),
+            const SizedBox(width: 12),
+            const Text('这笔工资属于', style: TextStyle(fontSize: 13.5)),
+            const Spacer(),
+            Text(
+              '$_year 年 $_month 月',
+              style: const TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1B1C1B),
+              ),
+            ),
+            const SizedBox(width: 4),
+            const Icon(Icons.chevron_right, color: Color(0xFFC4C9C4)),
+          ],
+        ),
       ),
     );
   }

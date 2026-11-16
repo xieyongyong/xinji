@@ -142,12 +142,23 @@ class ParsedImage {
   /// 该图的识别置信提示（空字符串表示无异常）
   final String? note;
 
+  /// 工资条标题上写的归属年月（如 "2025年06月薪资" → 2025/6）。
+  ///
+  /// 识别不到就是 null。为什么不让用户每次都手选：
+  /// 导入时分页截了好几张，月份只有标题那一张有，靠人记容易选错；
+  /// 但识别也可能出错（标题没截到、被水印糊了），所以只当**默认值**，
+  /// 校对页永远可以改。
+  final int? periodYear;
+  final int? periodMonth;
+
   ParsedImage({
     required this.index,
     required this.filePath,
     required this.rows,
     required this.rawText,
     this.note,
+    this.periodYear,
+    this.periodMonth,
   });
 
   List<ParsedRow> get itemRows => rows.where((e) => e.kind == ParsedRowKind.item).toList();

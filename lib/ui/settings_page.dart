@@ -400,6 +400,37 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
+              _sectionTitle('图片与识别'),
+              _card([
+                SwitchListTile(
+                  value: settings.compressImages,
+                  onChanged: (v) => settings.setCompressImages(v),
+                  title: const Text('保存时压缩图片', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text(
+                    '开启：宽度压到 1600、JPEG 质量 88，字仍然看得清，最省空间。\n'
+                    '关闭：原图直接存进 App 私有目录，细节完全保留，但长截图能占好几 MB。',
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                  ),
+                  isThreeLine: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  secondary: const Icon(Icons.compress, size: 20, color: Color(0xFF4A4F4A)),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.deWatermark,
+                  onChanged: (v) => settings.setDeWatermark(v),
+                  title: const Text('识别前去除浅灰水印', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text(
+                    '把比纸面浅一大截的灰色（水印、屏幕上下的渐变）刷成白，再交给识别。\n'
+                    '如果发现某个浅色小字没被识别出来，可以关掉这里再试一次。',
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                  ),
+                  isThreeLine: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  secondary: const Icon(Icons.auto_fix_high, size: 20, color: Color(0xFF4A4F4A)),
+                ),
+              ]),
+              const SizedBox(height: 18),
               _sectionTitle('录入与显示'),
               _card([
                 _item(

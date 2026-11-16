@@ -55,6 +55,9 @@ class OcrService : Service() {
         const val EXTRA_PATHS = "paths"
         const val EXTRA_PAYLOAD = "payload"
 
+        /** 是否在识别前刷掉浅灰水印 */
+        const val EXTRA_CLEAN = "clean"
+
         /** 单块识别超时。正常一块 1~2 秒，60 秒已经非常宽松 */
         private const val TILE_TIMEOUT_SEC = 60L
 
@@ -73,8 +76,9 @@ class OcrService : Service() {
         when (msg.what) {
             MSG_RECOGNIZE -> {
                 val paths = msg.data?.getStringArrayList(EXTRA_PATHS) ?: arrayListOf()
+                val clean = msg.data?.getBoolean(EXTRA_CLEAN, true) ?: true
                 val reply = msg.replyTo
-                worker.execute { runRecognition(paths, reply) }
+                worker.execute { runRecognition(paths, clean, reply) }
                 true
             }
 
@@ -158,12 +162,12 @@ class OcrService : Service() {
 
     // ------------------------------------------------------------ 识别主流程
 
-    private fun runRecognition(paths: List<String>, reply: Messenger?) {
+    private fun runRecognition(paths: List<String>, clean: Boolean, reply: Messenger?) {
         val payload = try {
             selfTest()
             val images = JSONArray()
             for ((i, path) in paths.withIndex()) {
-                images.put(recognizeImage(path, i))
+                images.put(recognizeImage(path, i, clean))
             }
             JSONObject().put("ok", true).put("images", images).toString()
         } catch (t: Throwable) {
@@ -217,12 +221,12 @@ class OcrService : Service() {
         }
     }
 
-    private fun recognizeImage(path: String, index: Int): JSONObject {
+    private fun recognizeImage(path: String, index: Int, clean: Boolean): JSONObject {
         val dir = File(cacheDir, "ocrtiles")
         if (!dir.exists()) dir.mkdirs()
         val tag = "o${System.currentTimeMillis()}_$index"
 
-        trace("图$index 开始分块 ${File(path).name}")
+        trace("图$index 开始分块 ${File(path).name} clean=$clean")
         val tiles = SlipImaging.tiles(
             path = path,
             tileHeight = TILE_HEIGHT,
@@ -230,7 +234,8 @@ class OcrService : Service() {
             maxWidth = MAX_WIDTH,
             quality = TILE_QUALITY,
             outDir = dir.absolutePath,
-            tag = tag
+            tag = tag,
+            clean = clean
         )
         trace("图$index 分成 ${tiles.size} 块")
 

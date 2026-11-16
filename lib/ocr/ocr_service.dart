@@ -27,11 +27,11 @@ class OcrService {
   ///
   /// 一次把整批交给原生（一次绑定、一次回传），比逐张调用省一次进程往返，
   /// 也避免每张图都重新唤醒识别器。
-  Future<List<OcrText>> recognizeFiles(List<String> paths) async {
+  Future<List<OcrText>> recognizeFiles(List<String> paths, {bool deWatermark = true}) async {
     if (paths.isEmpty) return const <OcrText>[];
 
     CrashLog.note('开始识别 ${paths.length} 张图');
-    final result = await NativeOcr.recognize(paths);
+    final result = await NativeOcr.recognize(paths, deWatermark: deWatermark);
     if (result.length != paths.length) {
       throw OcrException(
         '识别结果和图片数量对不上（${result.length}/${paths.length}），请重试',
@@ -47,7 +47,17 @@ class OcrService {
   /// 如果按"长边压到 1600"会把宽度压到 200 多，字全糊了，OCR 直接废掉。
   /// 所以只限制**宽度**上限，高度只受总像素兜底；并且整件事交给原生做，
   /// Dart 侧不 decode（decode 一张 13MP 长图就是一次 OOM 风险）。
-  Future<String> importImage(File source, {String? fileNameHint}) async {
+  /// [compress] = false 时**原样拷贝**，不重新编码。
+  ///
+  /// 用户可以在设置里关掉压缩：截图存档是为了以后回看，
+  /// 重新编码一次总会损失一点细节（尤其小字），有人宁愿多占点空间。
+  /// 注意关掉压缩后目标文件名保留原扩展名 —— 把 PNG 内容存成 .jpg
+  /// 会让相册和分享功能认错格式。
+  Future<String> importImage(
+    File source, {
+    String? fileNameHint,
+    bool compress = true,
+  }) async {
     final docsDir = await getApplicationDocumentsDirectory();
     final imageDir = Directory(p.join(docsDir.path, 'slips'));
     if (!await imageDir.exists()) {
@@ -55,8 +65,20 @@ class OcrService {
     }
 
     final stamp = DateTime.now().millisecondsSinceEpoch;
-    final targetName = '${stamp}_${fileNameHint ?? 'slip'}.jpg';
+    final srcExt = p.extension(source.path).toLowerCase();
+    final ext = compress ? '.jpg' : (srcExt.isEmpty ? '.jpg' : srcExt);
+    final targetName = '${stamp}_${fileNameHint ?? 'slip'}$ext';
     final targetPath = p.join(imageDir.path, targetName);
+
+    // ---- 不压缩：直接原图入库
+    if (!compress) {
+      try {
+        await source.copy(targetPath);
+        return targetPath;
+      } catch (e) {
+        CrashLog.note('原图拷贝失败，改走压缩：$e');
+      }
+    }
 
     // ---- 首选：原生压缩（内存安全）
     try {

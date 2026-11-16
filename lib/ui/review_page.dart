@@ -13,6 +13,7 @@ import '../ocr/merge_engine.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
 import 'widgets/image_viewer.dart';
+import 'widgets/period_picker.dart';
 
 /// 校对 / 新建 / 编辑三合一页面。
 ///
@@ -54,16 +55,26 @@ class ReviewPage extends StatefulWidget {
         initialImagePaths: imagePaths,
       );
 
-  /// 从 OCR 结果进入
+  /// 从 OCR 结果进入。
+  ///
+  /// [fallbackYear]/[fallbackMonth] 是用户在导入页选的月份；
+  /// [honorDetectedPeriod] 为 true（用户没手动改过月份）时，
+  /// 优先采用工资条标题上识别出来的年月 —— 它比"当前月"准得多，
+  /// 尤其是补录上个月工资条的时候。
   factory ReviewPage.fromOutcome({
     required RecognizeOutcome outcome,
     required String recordType,
+    int? fallbackYear,
+    int? fallbackMonth,
+    bool honorDetectedPeriod = true,
   }) {
     final now = DateTime.now();
+    final detected = outcome.periodYear != null && outcome.periodMonth != null;
     return ReviewPage._(
       outcome: outcome,
-      initialYear: now.year,
-      initialMonth: now.month,
+      initialYear: honorDetectedPeriod && detected ? outcome.periodYear! : (fallbackYear ?? now.year),
+      initialMonth:
+          honorDetectedPeriod && detected ? outcome.periodMonth! : (fallbackMonth ?? now.month),
       initialRecordType: recordType,
     );
   }
@@ -105,6 +116,31 @@ class _ReviewPageState extends State<ReviewPage> {
   bool _saving = false;
 
   bool get _isEdit => widget.editing != null;
+
+  /// 工资条标题上认出来的年月（识别不到为 false）
+  bool get _hasDetectedPeriod =>
+      widget.outcome?.periodYear != null && widget.outcome?.periodMonth != null;
+
+  /// 认出来的年月和当前选的不一样 → 给用户一条一键改过来的提示
+  bool get _detectedPeriodDiffers =>
+      _hasDetectedPeriod &&
+      (widget.outcome!.periodYear != _year || widget.outcome!.periodMonth != _month);
+
+  void _adoptDetectedPeriod() {
+    final o = widget.outcome;
+    if (o?.periodYear == null || o?.periodMonth == null) return;
+    setState(() {
+      _year = o!.periodYear!;
+      _month = o.periodMonth!;
+      if (!_isEdit) {
+        final state = context.read<AppState>();
+        final cur = state.employerById(_employerId);
+        if (cur == null || !cur.covers(_year, _month)) {
+          _employerId = state.employerForPeriod(_year, _month)?.id;
+        }
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -356,7 +392,7 @@ class _ReviewPageState extends State<ReviewPage> {
   Future<void> _pickPeriod() async {
     final result = await showDialog<({int year, int month})>(
       context: context,
-      builder: (ctx) => _PeriodPickerDialog(year: _year, month: _month),
+      builder: (ctx) => PeriodPickerDialog(year: _year, month: _month),
     );
     if (result != null) {
       setState(() {
@@ -382,6 +418,24 @@ class _ReviewPageState extends State<ReviewPage> {
       builder: (ctx) => _ItemEditDialog(draft: draft),
     );
     if (result == null) return;
+
+    // 转成信息项：从明细里摘掉，挪到信息项列表（保留原来的数字，只是不参与计算）
+    if (result.asInfo) {
+      setState(() {
+        _items.removeAt(index);
+        _infos.add(PayInfo(
+          name: draft.name,
+          value: draft.valueType == kValueCoefficient
+              ? (draft.coefficient == null ? '' : draft.coefficient!.toStringAsFixed(2))
+              : (draft.amountCents / 100).toStringAsFixed(2),
+          sortOrder: _infos.length,
+        ));
+        _applyPerfFormula();
+      });
+      if (result.remember) await _rememberCategory(draft.name, kFieldInfo);
+      return;
+    }
+
     setState(() {
       if (result.deleted) {
         _items.removeAt(index);
@@ -390,6 +444,43 @@ class _ReviewPageState extends State<ReviewPage> {
       }
       _applyPerfFormula();
     });
+
+    final saved = result.draft;
+    if (result.remember && saved != null && saved.name.trim().isNotEmpty) {
+      // 系数/推算这类"值类型"不写进模板归类，只记收入/扣款/信息项
+      await _rememberCategory(saved.name, saved.category);
+    }
+  }
+
+  /// 把「这个项目属于收入/扣款/信息项」写进项目模板。
+  ///
+  /// 这是本 App 提升准确率最有效的一条路：OCR 永远会认错，
+  /// 但只要用户纠正过一次，下次导入同样的写法就能自动按正确规则归类，
+  /// 不用每次改。
+  Future<void> _rememberCategory(String name, String category) async {
+    final state = context.read<AppState>();
+    final key = normalizeName(name);
+    if (key.isEmpty) return;
+
+    ItemTemplate? exist;
+    for (final t in state.templates) {
+      if (t.matches(key)) {
+        exist = t;
+        break;
+      }
+    }
+    if (exist != null && exist.category == category) return;
+
+    await state.saveTemplate(ItemTemplate(
+      id: exist?.id,
+      name: exist?.name ?? name,
+      category: category,
+      aliases: exist?.aliases ?? const [],
+      valueType: exist?.valueType ?? kValueAmount,
+      sortOrder: exist?.sortOrder ?? 0,
+      enabled: true,
+    ));
+    if (mounted) _toast('已记住：「${exist?.name ?? name}」以后按新规则归类');
   }
 
   Future<void> _addItem(String category) async {
@@ -820,6 +911,19 @@ class _ReviewPageState extends State<ReviewPage> {
             ),
             onTap: _pickPeriod,
           ),
+          if (_detectedPeriodDiffers)
+            InkWell(
+              onTap: _adoptDetectedPeriod,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Text(
+                  '工资条上写的是 ${widget.outcome!.periodYear} 年 '
+                  '${widget.outcome!.periodMonth} 月，点这里改过来',
+                  style: const TextStyle(fontSize: 11.5, color: kSeed, height: 1.4),
+                ),
+              ),
+            ),
           const Divider(height: 1),
           _employerTile(),
           const Divider(height: 1),
@@ -1348,7 +1452,19 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
 class _ItemEditResult {
   final PayItemDraft? draft;
   final bool deleted;
-  _ItemEditResult({this.draft, this.deleted = false});
+
+  /// 这一行本来就不是钱（如「休息日加班时长」被认成了收入），要挪去信息项
+  final bool asInfo;
+
+  /// 把这次的归类写进项目模板，下次识别自动照办
+  final bool remember;
+
+  _ItemEditResult({
+    this.draft,
+    this.deleted = false,
+    this.asInfo = false,
+    this.remember = false,
+  });
 }
 
 /// 明细项编辑弹窗
@@ -1367,6 +1483,9 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
   late TextEditingController _valueCtrl;
   late String _category;
   late String _valueType;
+
+  /// 「记住这个项目的归类」：默认勾上，但只对已有项目显示
+  bool _remember = true;
 
   bool get _isCoefficient => _valueType == kValueCoefficient;
 
@@ -1416,6 +1535,7 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
         amountCents: amountCents,
         coefficient: coefficient,
       ),
+      remember: _remember,
     ));
   }
 
@@ -1423,10 +1543,13 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.isNew ? '添加项目' : '编辑项目'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
+      // 包一层滚动：加了「转成信息项 / 记住归类」以后内容变高了，
+      // 小屏或键盘弹起时会超出屏幕
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
             controller: _nameCtrl,
             autofocus: widget.isNew,
             decoration: const InputDecoration(
@@ -1503,7 +1626,39 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
               ),
             ),
           ],
-        ],
+          if (!widget.isNew) ...[
+            const SizedBox(height: 4),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () => Navigator.of(context).pop(
+                  _ItemEditResult(asInfo: true, remember: _remember),
+                ),
+                icon: const Icon(Icons.swap_horiz, size: 15),
+                label: const Text(
+                  '这不是钱，转成信息项',
+                  style: TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+            CheckboxListTile(
+              value: _remember,
+              onChanged: (v) => setState(() => _remember = v ?? false),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text('记住这个项目的归类', style: TextStyle(fontSize: 12.5)),
+              subtitle: const Text(
+                '下次识别到同名项目，自动按这次的规则处理（收入/扣款/信息项）',
+                style: TextStyle(fontSize: 11, height: 1.4, color: Color(0xFF9AA09A)),
+              ),
+            ),
+          ],
+        ),
       ),
       actions: [
         if (!widget.isNew)
@@ -1515,90 +1670,6 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
           ),
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
         FilledButton(onPressed: _confirm, child: const Text('确定')),
-      ],
-    );
-  }
-}
-
-/// 年月选择
-class _PeriodPickerDialog extends StatefulWidget {
-  final int year;
-  final int month;
-
-  const _PeriodPickerDialog({required this.year, required this.month});
-
-  @override
-  State<_PeriodPickerDialog> createState() => _PeriodPickerDialogState();
-}
-
-class _PeriodPickerDialogState extends State<_PeriodPickerDialog> {
-  late int _year;
-  late int _month;
-
-  @override
-  void initState() {
-    super.initState();
-    _year = widget.year;
-    _month = widget.month;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: Row(
-        children: [
-          IconButton(
-            onPressed: () => setState(() => _year--),
-            icon: const Icon(Icons.chevron_left),
-          ),
-          Expanded(
-            child: Text('$_year 年', textAlign: TextAlign.center),
-          ),
-          IconButton(
-            onPressed: () => setState(() => _year++),
-            icon: const Icon(Icons.chevron_right),
-          ),
-        ],
-      ),
-      content: SizedBox(
-        width: 300,
-        child: GridView.count(
-          crossAxisCount: 4,
-          shrinkWrap: true,
-          childAspectRatio: 1.5,
-          mainAxisSpacing: 6,
-          crossAxisSpacing: 6,
-          children: List.generate(12, (i) {
-            final m = i + 1;
-            final selected = m == _month;
-            return InkWell(
-              onTap: () => setState(() => _month = m),
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: selected ? kSeed : const Color(0xFFF2F4F2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  '$m月',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: selected ? Colors.white : const Color(0xFF4A4F4A),
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                  ),
-                ),
-              ),
-            );
-          }),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('取消')),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, (year: _year, month: _month)),
-          child: const Text('确定'),
-        ),
       ],
     );
   }

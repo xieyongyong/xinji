@@ -104,12 +104,37 @@ class FieldParser {
       final row = _parseRow(vr, index, ctx, skip, fragments);
       if (row != null) rows.add(row);
     }
+    final period = detectPeriod(visualRows);
     return ParsedImage(
       index: index,
       filePath: filePath,
       rows: _mergeWrappedNames(rows),
       rawText: rawText,
+      periodYear: period?.year,
+      periodMonth: period?.month,
     );
+  }
+
+  /// 从标题行认出这笔工资的归属年月。
+  ///
+  /// 常见写法：「2025年06月薪资」「2025-06 工资条」「2025/6月份工资」。
+  /// 只认**第一个**命中的（标题一定在最上面），并且年份必须在合理区间，
+  /// 否则工号/金额里的数字会被误当成日期。
+  static ({int year, int month})? detectPeriod(List<VisualRow> rows) {
+    final re = RegExp(r'(20\d{2})\s*[-/年.]\s*(\d{1,2})(?!\d)');
+    for (final row in rows) {
+      for (final cell in row.cells) {
+        final m = re.firstMatch(cell.text);
+        if (m == null) continue;
+        final y = int.tryParse(m.group(1) ?? '');
+        final mo = int.tryParse(m.group(2) ?? '');
+        if (y == null || mo == null) continue;
+        if (y < 2000 || y > 2100) continue;
+        if (mo < 1 || mo > 12) continue;
+        return (year: y, month: mo);
+      }
+    }
+    return null;
   }
 
   /// 找出「水印文字」：同一段文字在一张图里重复出现多次。
@@ -312,6 +337,20 @@ class FieldParser {
     }
 
     // 4) 信息项：有值但不是钱（姓名/工号/部门/基薪/天数/时数…）
+    //
+    //    模板里被标成 info 的项目**优先**：那是用户在核对页手动纠正过的
+    //    （比如「休息日加班」被错当成收入），下次导入必须按同样规则归类，
+    //    否则每次都要改一遍。
+    if (tpl != null && tpl.category == kFieldInfo) {
+      return ParsedRow(
+        name: tpl.name,
+        infoValue: _infoValueFor(compact, rawName),
+        kind: ParsedRowKind.info,
+        raw: text,
+        imageIndex: imageIndex,
+        top: row.top,
+      );
+    }
     final infoLabel = _matchInfoLabel(rawName);
     if (infoLabel != null) {
       return ParsedRow(
@@ -427,9 +466,25 @@ class FieldParser {
     return null;
   }
 
+  /// 信息项的值：先按"这一行的实际叫法"切，切不出来再退回关键字表。
+  ///
+  /// 为什么不能只用关键字表：用户在核对页手动标成信息项的项目，
+  /// 叫法往往不在 [_infoKeywordsByLength] 里（如"休息日加班"），
+  /// 用关键字切会切出空值或半截。
+  String _infoValueFor(String compact, String rawName) {
+    final label = rawName.replaceAll(RegExp(r'\s+'), '');
+    var v = compact;
+    if (label.isNotEmpty && v.startsWith(label)) {
+      v = v.substring(label.length);
+    } else {
+      v = _infoValue(compact);
+    }
+    v = v.replaceFirst(RegExp(r'^[：:\-—_]+'), '');
+    return v.trim();
+  }
+
   /// 信息项的值：把标签从整行文本里切掉，剩下的就是值
-  String _infoValue(String compact) {
-    // 用最长的、真的出现在行里的关键字来切，避免"薪级"把"薪级对应基薪"切坏
+  String _infoValue(String compact) {    // 用最长的、真的出现在行里的关键字来切，避免"薪级"把"薪级对应基薪"切坏
     for (final k in _infoKeywordsByLength) {
       final at = compact.indexOf(k);
       if (at < 0) continue;

@@ -43,6 +43,9 @@ object OcrBridge {
     private var pending: MethodChannel.Result? = null
     private var messenger: Messenger? = null
     private var paths: ArrayList<String> = arrayListOf()
+
+    /** 是否在识别前刷掉浅灰水印（Dart 设置里可关） */
+    private var deWatermark: Boolean = true
     private var appContext: Context? = null
 
     private val timeoutTask = Runnable {
@@ -76,6 +79,7 @@ object OcrBridge {
             val msg = Message.obtain(null, OcrService.MSG_RECOGNIZE)
             msg.data = Bundle().apply {
                 putStringArrayList(OcrService.EXTRA_PATHS, paths)
+                putBoolean(OcrService.EXTRA_CLEAN, deWatermark)
             }
             msg.replyTo = reply
             try {
@@ -104,20 +108,28 @@ object OcrBridge {
                     result.error("ocr_bad_args", "没有要识别的图片", null)
                     return
                 }
-                recognize(context, list, result)
+                // 缺省为 true：老版本 Dart 传参不带这个字段也不能把去水印关掉
+                val clean = call.argument<Boolean>("deWatermark") ?: true
+                recognize(context, list, clean, result)
             }
 
             else -> result.notImplemented()
         }
     }
 
-    private fun recognize(context: Context, list: List<String>, result: MethodChannel.Result) {
+    private fun recognize(
+        context: Context,
+        list: List<String>,
+        clean: Boolean,
+        result: MethodChannel.Result
+    ) {
         if (pending != null) {
             result.error("ocr_busy", "上一批还在识别，请稍等一下", null)
             return
         }
         pending = result
         paths = ArrayList(list)
+        deWatermark = clean
 
         val ctx = context.applicationContext
         appContext = ctx

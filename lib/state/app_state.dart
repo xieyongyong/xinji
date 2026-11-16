@@ -23,7 +23,12 @@ class RecognizeOutcome {
   /// 每张图的解析明细（校对页要显示缩略图、原文、从哪张图来的）
   final List<ParsedImage> images;
 
-  RecognizeOutcome(this.result, this.images);
+  /// 工资条标题上写的归属年月（多图取多数），识别不到为 null。
+  /// 只当默认值用——校对页永远可以改。
+  final int? periodYear;
+  final int? periodMonth;
+
+  RecognizeOutcome(this.result, this.images, {this.periodYear, this.periodMonth});
 }
 
 /// 全局状态。用 ChangeNotifier + provider 就够了：
@@ -226,13 +231,14 @@ class AppState extends ChangeNotifier {
   Future<RecognizeOutcome> recognizeImages(
     List<String> filePaths, {
     List<String>? keepPaths,
+    bool deWatermark = true,
   }) async {
     final parser = FieldParser(templates);
     final parsed = <ParsedImage>[];
 
     // 一次把整批交给原生（独立进程）。万一那边崩了，这里收到的是普通异常，
     // 不是"整个 App 消失"；图片早就在第 79 行存好了，用户可以直接手动填。
-    final recognized = await _recognizeAll(filePaths);
+    final recognized = await _recognizeAll(filePaths, deWatermark: deWatermark);
 
     for (var i = 0; i < filePaths.length; i++) {
       final path = filePaths[i];
@@ -249,17 +255,43 @@ class AppState extends ChangeNotifier {
 
     final engine = MergeEngine(templates);
     final merged = engine.merge(parsed);
-    return RecognizeOutcome(merged, parsed);
+
+    // 归属年月：多张图里出现最多的那个组合（标题只会在其中一张上）
+    final votes = <String, int>{};
+    final byKey = <String, ({int year, int month})>{};
+    for (final img in parsed) {
+      final y = img.periodYear;
+      final m = img.periodMonth;
+      if (y == null || m == null) continue;
+      final k = '$y-$m';
+      votes[k] = (votes[k] ?? 0) + 1;
+      byKey[k] = (year: y, month: m);
+    }
+    ({int year, int month})? period;
+    var bestCount = 0;
+    for (final e in votes.entries) {
+      if (e.value > bestCount) {
+        bestCount = e.value;
+        period = byKey[e.key];
+      }
+    }
+
+    return RecognizeOutcome(
+      merged,
+      parsed,
+      periodYear: period?.year,
+      periodMonth: period?.month,
+    );
   }
 
-  /// 把用户选的原图收进私有目录（顺便压缩），返回新路径
-  Future<String> importImage(File source, int index) =>
-      ocr.importImage(source, fileNameHint: 'p$index');
+  /// 把用户选的原图收进私有目录（是否压缩由设置决定），返回新路径
+  Future<String> importImage(File source, int index, {bool compress = true}) =>
+      ocr.importImage(source, fileNameHint: 'p$index', compress: compress);
 
   /// 识别一批图，把底层五花八门的异常统一成 [OcrException]
-  Future<List<OcrText>> _recognizeAll(List<String> paths) async {
+  Future<List<OcrText>> _recognizeAll(List<String> paths, {bool deWatermark = true}) async {
     try {
-      return await ocr.recognizeFiles(paths);
+      return await ocr.recognizeFiles(paths, deWatermark: deWatermark);
     } on OcrException {
       rethrow;
     } catch (e) {
