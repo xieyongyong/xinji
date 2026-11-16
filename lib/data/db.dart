@@ -18,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 2,
+      version: 3,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -146,6 +146,78 @@ class AppDb {
       await _createV2Tables(db);
       await _seedDefaultSalaryTemplate(db);
     }
+    if (oldVersion < 3) {
+      // v3：基本绩效改为「推算值」（它不在应发里，早年被当成收入会多算一遍）
+      await _migrateV3(db);
+    }
+  }
+
+  /// v3 迁移：只改「解释方式」，不动用户数据。
+  ///
+  /// 起因是真实工资条长这样：只印「本月绩效系数 1.1」和「实发绩效工资 1826」，
+  /// 基本绩效 1660 是反推出来的，已经含在实发绩效里。
+  /// 老版本把「基本绩效」当普通收入项，反推出来会凭空多 1660。
+  static Future<void> _migrateV3(Database db) async {
+    // 1) 基本绩效 → 推算值（不计入合计）
+    await db.rawUpdate(
+      "UPDATE template_field SET value_type = 'derived' "
+      "WHERE name IN ('基本绩效','绩效基数','绩效基薪') AND value_type <> 'derived'",
+    );
+
+    // 2) 新识别叫法补进别名，保证跨月对比不断裂
+    Future<void> addAlias(String name, String aliases) async {
+      await db.rawUpdate(
+        'UPDATE item_template SET aliases = TRIM(COALESCE(aliases, \'\') || \',$aliases\') '
+        'WHERE name = ?',
+        [name],
+      );
+    }
+
+    await addAlias('绩效工资', '实发绩效工资,实发绩效');
+    await addAlias('个人社保', '社保');
+    await addAlias('加班费', '加班工资总额');
+
+    // 3) 老模板里没有的项目补上（存在就跳过，绝不影响用户已改过的内容）
+    Future<void> ensureItem(String name, String category, String aliases, int order) async {
+      final exist = await db.query('item_template',
+          columns: ['id'], where: 'name = ?', whereArgs: [name], limit: 1);
+      if (exist.isNotEmpty) return;
+      await db.insert('item_template', {
+        'name': name,
+        'category': category,
+        'aliases': aliases,
+        'value_type': 'amount',
+        'sort_order': order,
+        'enabled': 1,
+      });
+    }
+
+    await ensureItem('特别奖金', 'income', '奖金,一次性奖金', 9);
+    await ensureItem('伙食费', 'deduction', '透支伙食费,餐费,伙食', 17);
+
+    // 4) 每套发薪模板补「特别奖金」和「部门」两个字段
+    final templates = await db.query('salary_template', columns: ['id']);
+    for (final t in templates) {
+      final id = t['id'] as int;
+      Future<void> ensureField(String name, String category, int order) async {
+        final exist = await db.query('template_field',
+            columns: ['id'],
+            where: 'template_id = ? AND name = ?',
+            whereArgs: [id, name],
+            limit: 1);
+        if (exist.isNotEmpty) return;
+        await db.insert('template_field', {
+          'template_id': id,
+          'name': name,
+          'category': category,
+          'value_type': 'amount',
+          'sort_order': order,
+        });
+      }
+
+      await ensureField('特别奖金', 'income', 30);
+      await ensureField('部门', 'info', 27);
+    }
   }
 
   /// 首次安装时预置一套「默认发薪模板」并设为生效。
@@ -167,9 +239,12 @@ class AppDb {
       // ---- 收入项
       TemplateField(name: '基本工资', category: kCategoryIncome, sortOrder: 1),
       TemplateField(name: '岗位津贴', category: kCategoryIncome, sortOrder: 2),
+      // 基本绩效不是"发给你的一笔钱"，而是绩效工资的基数：
+      // 工资条上常常只给系数和实发绩效，它是反推出来的 → 设成推算值，不计入合计
       TemplateField(
           name: '基本绩效',
           category: kCategoryIncome,
+          valueType: kValueDerived,
           sortOrder: 3),
       TemplateField(
           name: '绩效系数',
@@ -180,6 +255,7 @@ class AppDb {
       TemplateField(name: '工龄补贴', category: kCategoryIncome, sortOrder: 6),
       TemplateField(name: '其他津贴', category: kCategoryIncome, sortOrder: 7),
       TemplateField(name: '加班费', category: kCategoryIncome, sortOrder: 8),
+      TemplateField(name: '特别奖金', category: kCategoryIncome, sortOrder: 9),
       // ---- 扣款项
       TemplateField(name: '个人社保', category: kCategoryDeduction, sortOrder: 11),
       TemplateField(name: '个人公积金', category: kCategoryDeduction, sortOrder: 12),
@@ -190,10 +266,11 @@ class AppDb {
       // ---- 信息项（不计入任何合计）
       TemplateField(name: '姓名', category: kFieldInfo, sortOrder: 21),
       TemplateField(name: '工号', category: kFieldInfo, sortOrder: 22),
-      TemplateField(name: '业务单位', category: kFieldInfo, sortOrder: 23),
-      TemplateField(name: '薪级', category: kFieldInfo, sortOrder: 24),
-      TemplateField(name: '薪级对应基薪', category: kFieldInfo, sortOrder: 25),
-      TemplateField(name: '应出勤天数', category: kFieldInfo, sortOrder: 26),
+      TemplateField(name: '部门', category: kFieldInfo, sortOrder: 23),
+      TemplateField(name: '业务单位', category: kFieldInfo, sortOrder: 24),
+      TemplateField(name: '薪级', category: kFieldInfo, sortOrder: 25),
+      TemplateField(name: '薪级对应基薪', category: kFieldInfo, sortOrder: 26),
+      TemplateField(name: '应出勤天数', category: kFieldInfo, sortOrder: 27),
     ];
 
     final batch = db.batch();
@@ -232,7 +309,9 @@ class AppDb {
       ItemTemplate(
         name: '绩效工资',
         category: kCategoryIncome,
-        aliases: ['绩效奖金', '绩效', '考核工资'],
+        // 「实发绩效工资」必须在这里拦住：它含"实发"，
+        // 不在别名里就会被判成实发合计（1826 顶替 8181）
+        aliases: ['绩效奖金', '绩效', '考核工资', '实发绩效工资', '实发绩效'],
         sortOrder: 4,
       ),
       ItemTemplate(
@@ -250,14 +329,20 @@ class AppDb {
       ItemTemplate(
         name: '加班费',
         category: kCategoryIncome,
-        aliases: ['加班工资', '延时加班'],
+        aliases: ['加班工资', '延时加班', '加班工资总额', '加班费总额'],
         sortOrder: 7,
+      ),
+      ItemTemplate(
+        name: '特别奖金',
+        category: kCategoryIncome,
+        aliases: ['奖金', '一次性奖金', '特殊奖金'],
+        sortOrder: 8,
       ),
       // 扣款项（管理费、水电费按两项预置，若你公司是一项可自行合并）
       ItemTemplate(
         name: '个人社保',
         category: kCategoryDeduction,
-        aliases: ['社会保险', '社保个人', '养老', '医疗保险', '失业保险'],
+        aliases: ['社会保险', '社保个人', '社保', '养老', '医疗保险', '失业保险'],
         sortOrder: 11,
       ),
       ItemTemplate(
@@ -289,6 +374,12 @@ class AppDb {
         category: kCategoryDeduction,
         aliases: ['其他扣除', '罚款', '借款扣款', '补扣'],
         sortOrder: 16,
+      ),
+      ItemTemplate(
+        name: '伙食费',
+        category: kCategoryDeduction,
+        aliases: ['透支伙食费', '餐费', '伙食'],
+        sortOrder: 17,
       ),
     ];
 

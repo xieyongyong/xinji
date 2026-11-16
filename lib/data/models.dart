@@ -10,9 +10,16 @@ const String kTypeExtra = 'extra';
 const String kCategoryIncome = 'income';
 const String kCategoryDeduction = 'deduction';
 
-/// 明细值类型：金额 / 系数（如绩效系数 1.20）
+/// 明细值类型：金额 / 系数（如绩效系数 1.20）/ 推算值
+///
+/// 推算值（derived）是为了「基本绩效」这类字段：
+/// 工资条上只印「本月绩效系数 1.1」和「实发绩效工资 1826」，
+/// 基本绩效 = 1826 ÷ 1.1 = 1660 —— 它是**反推出来的基数**，
+/// 已经体现在实发绩效里，再算进应发就会重复计算。
+/// 所以它要能被看见、能被公式引用，但**结构上不参与任何合计**。
 const String kValueAmount = 'amount';
 const String kValueCoefficient = 'coefficient';
+const String kValueDerived = 'derived';
 
 /// 发薪模板字段分类：收入 / 扣款 / 信息（信息项不参与任何合计）
 const String kFieldInfo = 'info';
@@ -238,6 +245,14 @@ class PayItem {
   bool get isIncome => category == kCategoryIncome;
   bool get isDeduction => category == kCategoryDeduction;
   bool get isCoefficient => valueType == kValueCoefficient;
+
+  /// 推算值：由公式反推得到，不参与任何合计（如基本绩效）
+  bool get isDerived => valueType == kValueDerived;
+
+  /// 这一项是否应该被加进合计。
+  /// 唯一判据就这一处，别的地方都调它 —— 免得哪天又出现
+  /// "详情页没算、首页算了"这种两边对不上的 bug。
+  bool get countsInTotal => valueType == kValueAmount;
 
   /// 行右侧显示什么
   String get displayValue {

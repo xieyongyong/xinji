@@ -343,9 +343,13 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
               dense: true,
               contentPadding: const EdgeInsets.symmetric(horizontal: 14),
               title: Text(f.name, style: const TextStyle(fontSize: 13.5)),
-              subtitle: f.valueType == kValueCoefficient
-                  ? const Text('系数型', style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A)))
-                  : null,
+              subtitle: switch (f.valueType) {
+                kValueCoefficient => const Text('系数型',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+                kValueDerived => const Text('推算型 · 不计入合计',
+                    style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+                _ => null,
+              },
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -406,7 +410,7 @@ class _FieldEditDialog extends StatefulWidget {
 class _FieldEditDialogState extends State<_FieldEditDialog> {
   late final TextEditingController _nameCtrl;
   late String _category;
-  late bool _isCoefficient;
+  late String _valueType;
 
   bool get _isNew => widget.field == null;
 
@@ -415,7 +419,7 @@ class _FieldEditDialogState extends State<_FieldEditDialog> {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.field?.name ?? '');
     _category = widget.field?.category ?? kCategoryIncome;
-    _isCoefficient = widget.field?.valueType == kValueCoefficient;
+    _valueType = widget.field?.valueType ?? kValueAmount;
   }
 
   @override
@@ -432,9 +436,7 @@ class _FieldEditDialogState extends State<_FieldEditDialog> {
       TemplateField(
         name: name,
         category: _category,
-        valueType: _category != kFieldInfo && _isCoefficient
-            ? kValueCoefficient
-            : kValueAmount,
+        valueType: _category != kFieldInfo ? _valueType : kValueAmount,
       ),
     );
   }
@@ -475,15 +477,38 @@ class _FieldEditDialogState extends State<_FieldEditDialog> {
             selected: {_category},
             onSelectionChanged: (s) => setState(() => _category = s.first),
           ),
-          if (_category != kFieldInfo)
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              dense: true,
-              value: _isCoefficient,
-              onChanged: (v) => setState(() => _isCoefficient = v),
-              title: const Text('这是系数（如绩效系数 1.20）',
-                  style: TextStyle(fontSize: 12.5)),
+          if (_category != kFieldInfo) ...[
+            const SizedBox(height: 10),
+            SegmentedButton<String>(
+              showSelectedIcon: false,
+              style: const ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              segments: const [
+                ButtonSegment(
+                    value: kValueAmount,
+                    label: Text('金额', style: TextStyle(fontSize: 12))),
+                ButtonSegment(
+                    value: kValueCoefficient,
+                    label: Text('系数', style: TextStyle(fontSize: 12))),
+                ButtonSegment(
+                    value: kValueDerived,
+                    label: Text('推算', style: TextStyle(fontSize: 12))),
+              ],
+              selected: {_valueType},
+              onSelectionChanged: (s) => setState(() => _valueType = s.first),
             ),
+            const SizedBox(height: 8),
+            Text(
+              switch (_valueType) {
+                kValueCoefficient => '系数型：如绩效系数 1.20，不是钱，不计入合计',
+                kValueDerived => '推算型：如基本绩效，由「绩效工资 ÷ 绩效系数」反推，不计入合计',
+                _ => '金额型：正常参与应发 / 代扣合计',
+              },
+              style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A), height: 1.5),
+            ),
+          ],
           if (_category == kFieldInfo)
             const Padding(
               padding: EdgeInsets.only(top: 8),

@@ -38,7 +38,7 @@ class MonthSummary {
     for (final r in monthly) {
       for (final it in r.items) {
         if (it.category != category) continue;
-        if (it.valueType == kValueCoefficient) continue; // 系数不是钱
+        if (!it.countsInTotal) continue; // 系数、推算值都不是钱
         map[it.name] = (map[it.name] ?? 0) + it.amountCents;
       }
     }

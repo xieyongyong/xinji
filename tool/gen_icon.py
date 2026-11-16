@@ -1,17 +1,20 @@
 # -*- coding: utf-8 -*-
-"""生成「薪迹」应用图标：红底 + 立体 X。
+"""生成「薪迹」应用图标：红底 + Twitter 的 X 字形。
 
 为什么用纯 Python 画而不是调图像库：
-  这台机器没装 Pillow，装它又要走代理。图标本身是纯几何图形，
-  自己写光栅化 + PNG 编码（zlib 是标准库）反而最可控、零依赖。
+  这台机器没装 Pillow，装它又要走代理。图标是纯矢量图形，
+  自己写「路径光栅化 + PNG 编码」（zlib 是标准库）反而最可控、零依赖。
 
 设计说明：
-  - 底色：深红竖向渐变，顶部略亮，有体积感
-  - 主体：两笔交叉的 X，圆角、带斜面高光
-  - 立体：先在右下方画一层深红"厚度"，再叠主体，形成挤出效果
+  - 底色：深红竖向渐变（保留上一版背景，用户认可的）
+  - 主体：**真正的 X 标志轮廓**，不是两笔圆头粗线拼的叉
+    —— 用户明确说"背景可以，但 X 不喜欢，沿用 Twitter 的 X 图标"
+  - 字形用官方 SVG 路径（1200×1227 视图框）+ 奇偶填充规则，
+    内圈是挖空的反向子路径，画出来才是那个有棱角的 X
 """
 import math
 import os
+import re
 import struct
 import zlib
 
@@ -34,114 +37,198 @@ def write_png(path, w, h, rgba):
         f.write(png)
 
 
-# ---------------------------------------------------------------- 光栅化
+# ---------------------------------------------------------------- 背景配色
 
 BG_TOP = (211, 47, 47)
 BG_BOTTOM = (142, 16, 16)
-X_TOP = (255, 252, 249)
-X_BOTTOM = (236, 166, 148)
-X_SHADOW = (86, 8, 8)
-
-SQ2 = math.sqrt(0.5)
-
-
-def _bar_hit(px, py, cx, cy, ux, uy, half_len, half_thk, cap_extra=0.0):
-    """点是否落在以 (cx,cy) 为中心、方向 (ux,uy) 的圆角粗线内。
-    返回 (是否命中, 归一化横向距离 0=中轴 1=边缘)"""
-    dx, dy = px - cx, py - cy
-    t = dx * ux + dy * uy           # 沿轴投影
-    d = abs(-dx * uy + dy * ux)     # 垂轴距离
-    if abs(t) <= half_len and d <= half_thk:
-        return True, d / half_thk
-    # 两端圆头
-    if abs(t) > half_len:
-        ex = cx + ux * half_len * (1 if t > 0 else -1)
-        ey = cy + uy * half_len * (1 if t > 0 else -1)
-        dist = math.hypot(px - ex, py - ey)
-        if dist <= half_thk:
-            return True, dist / half_thk
-    return False, 0.0
-
-
-def _x_coverage(px, py, scale):
-    """返回 (是否在 X 内, 斜面强度 0..1)"""
-    cx = cy = 0.5
-    half_len = 0.355 * scale
-    half_thk = 0.088 * scale
-    best = None
-    for ux, uy in ((SQ2, SQ2), (SQ2, -SQ2)):
-        hit, bevel = _bar_hit(px, py, cx, cy, ux, uy, half_len, half_thk)
-        if hit:
-            if best is None or bevel < best:
-                best = bevel
-    if best is None:
-        return False, 0.0
-    return True, best
+GLYPH = (255, 255, 255)
 
 
 def _lerp(a, b, k):
-    k = max(0.0, min(1.0, k))
-    return tuple(int(a[i] + (b[i] - a[i]) * k) for i in range(3))
+    k = 0.0 if k < 0 else (1.0 if k > 1 else k)
+    return tuple(a[i] + (b[i] - a[i]) * k for i in range(3))
 
 
-def _shade_x(y, bevel, scale):
-    """X 本体的颜色：上亮下暗 + 边缘压暗做出斜面"""
-    base = _lerp(X_TOP, X_BOTTOM, (y - (0.5 - 0.36 * scale)) / max(1e-6, 0.72 * scale))
-    # 边缘压暗（模拟倒角）
-    dark = tuple(int(c * (1.0 - 0.42 * (bevel ** 1.6))) for c in base)
-    # 中轴顶部再补一点高光
-    if bevel < 0.30 and y < 0.46:
-        boost = 1.0 - bevel / 0.30
-        dark = tuple(int(min(255, c + 30 * boost)) for c in dark)
-    return dark
+# ---------------------------------------------------------------- SVG 路径
+
+# X（原 Twitter）官方标志，viewBox 0 0 24 24
+# 取自 simple-icons 的官方形状：外轮廓 + 一条细细的"挖空"带，
+# 那条带就是 X 标志中间那条缝，去掉它就成了普通的手写叉。
+X_PATH = (
+    'M14.234 10.162 22.977 0h-2.072l-7.591 8.824L7.251 0H.258l9.168 13.343'
+    'L.258 24H2.33l8.016-9.318L16.749 24h6.993'
+    'zm-2.837 3.299-.929-1.329L3.076 1.56h3.182l5.965 8.532.929 1.329'
+    ' 7.754 11.09h-3.182z'
+)
+
+VIEW_W, VIEW_H = 24.0, 24.0
+
+_TOKEN = re.compile(r'[MLHVmlhvzZ]|-?\d*\.?\d+(?:[eE][-+]?\d+)?')
 
 
-def render(size, scale=1.0, with_bg=True, ss=3):
-    """渲染一张 size×size 的 RGBA 图标（ss 倍超采样抗锯齿）"""
+def parse_path(d):
+    """支持 M/L/H/V/Z 及其相对写法（够用了），返回若干闭合多边形。"""
+    toks = _TOKEN.findall(d)
+    subs, cur = [], []
+    x = y = 0.0
+    sx = sy = 0.0
+    cmd = None
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t.isalpha():
+            cmd = t
+            i += 1
+            if cmd in 'Zz':
+                if len(cur) >= 3:
+                    subs.append(cur)
+                cur = []
+                x, y = sx, sy
+            continue
+        rel = cmd.islower()
+        c = cmd.upper()
+        if c == 'M':
+            nx, ny = float(toks[i]), float(toks[i + 1])
+            i += 2
+            if rel:
+                nx, ny = x + nx, y + ny
+            x, y = nx, ny
+            sx, sy = x, y
+            cur = [(x, y)]
+            cmd = 'l' if rel else 'L'
+        elif c == 'L':
+            nx, ny = float(toks[i]), float(toks[i + 1])
+            i += 2
+            if rel:
+                nx, ny = x + nx, y + ny
+            x, y = nx, ny
+            cur.append((x, y))
+        elif c == 'H':
+            nx = float(toks[i])
+            i += 1
+            x = x + nx if rel else nx
+            cur.append((x, y))
+        elif c == 'V':
+            ny = float(toks[i])
+            i += 1
+            y = y + ny if rel else ny
+            cur.append((x, y))
+        else:
+            i += 1
+    if len(cur) >= 3:
+        subs.append(cur)
+    return subs
+
+
+def build_edges(subpaths, ox, oy, scale):
+    """把所有多边形边做成扫描线用的边表（已做坐标变换）。"""
+    edges = []
+    for poly in subpaths:
+        pts = [(ox + px * scale, oy + py * scale) for px, py in poly]
+        n = len(pts)
+        for k in range(n):
+            x0, y0 = pts[k]
+            x1, y1 = pts[(k + 1) % n]
+            if y0 == y1:
+                continue
+            edges.append((x0, y0, x1, y1))
+    return edges
+
+
+def rasterize(edges, size):
+    """奇偶规则扫描线填充，返回 size×size 的 0/1 覆盖位图（逐行 bytearray）。"""
+    rows = [bytearray(size) for _ in range(size)]
+    for py in range(size):
+        sy = py + 0.5
+        xs = []
+        for x0, y0, x1, y1 in edges:
+            if (y0 <= sy < y1) or (y1 <= sy < y0):
+                t = (sy - y0) / (y1 - y0)
+                xs.append(x0 + (x1 - x0) * t)
+        if not xs:
+            continue
+        xs.sort()
+        row = rows[py]
+        for k in range(0, len(xs) - 1, 2):
+            a, b = xs[k], xs[k + 1]
+            ia = int(math.ceil(a - 0.5))
+            ib = int(math.floor(b - 0.5))
+            if ia < 0:
+                ia = 0
+            if ib > size - 1:
+                ib = size - 1
+            for x in range(ia, ib + 1):
+                row[x] = 1
+    return rows
+
+
+def coverage(mask, size, ss):
+    """把 ss 倍超采样的位图降采样成 0..1 的覆盖率。"""
+    n = ss * ss
+    out = []
+    for y in range(size):
+        row = [0.0] * size
+        for dy in range(ss):
+            src = mask[y * ss + dy]
+            base = 0
+            for x in range(size):
+                acc = 0
+                for dx in range(ss):
+                    acc += src[base + dx]
+                base += ss
+                row[x] += acc
+        out.append([v / n for v in row])
+    return out
+
+
+def render(size, glyph_ratio=0.60, with_bg=True, ss=3):
+    """渲染一张 size×size 的 RGBA 图标。"""
     big = size * ss
+
+    # 字形缩放到画布中央（等比，按宽度算）
+    gscale = (big * glyph_ratio) / VIEW_W
+    drawn_w = VIEW_W * gscale
+    drawn_h = VIEW_H * gscale
+    ox = (big - drawn_w) / 2
+    oy = (big - drawn_h) / 2
+
+    subpaths = parse_path(X_PATH)
+
+    # 纯白字形，不做投影/斜面 —— X 的标志是扁平的，
+    # 加立体反而把它弄脏（上一版就是"红底立体 X"，用户不喜欢）
+    main_mask = rasterize(build_edges(subpaths, ox, oy, gscale), big)
+
     buf = bytearray(big * big * 4)
-
-    # 立体厚度：整体向右下偏移
-    off_x = 0.030 * scale
-    off_y = 0.036 * scale
-
     for py in range(big):
         fy = (py + 0.5) / big
+        mrow = main_mask[py]
         for px in range(big):
-            fx = (px + 0.5) / big
             i = (py * big + px) * 4
 
             if with_bg:
-                # 竖向渐变 + 顶部中央柔光
                 r, g, b = _lerp(BG_TOP, BG_BOTTOM, fy ** 0.85)
-                halo = max(0.0, 1.0 - math.hypot(fx - 0.5, fy - 0.32) / 0.62)
-                halo = halo ** 2 * 0.30
-                r = int(r + (255 - r) * halo * 0.45)
-                g = int(g + (255 - g) * halo * 0.30)
-                b = int(b + (255 - b) * halo * 0.30)
-                a = 255
+                # 顶部中央一点柔光，让红色不呆板
+                halo = max(0.0, 1.0 - math.hypot(px / big - 0.5, fy - 0.30) / 0.62)
+                halo = halo ** 2 * 0.26
+                r += (255 - r) * halo * 0.40
+                g += (255 - g) * halo * 0.26
+                b += (255 - b) * halo * 0.26
+                a = 255.0
             else:
-                r = g = b = 0
-                a = 0
+                r = g = b = 0.0
+                a = 0.0
 
-            # 先画阴影层
-            hit_s, bv_s = _x_coverage(fx - off_x, fy - off_y, scale)
-            if hit_s:
-                r, g, b = X_SHADOW
-                a = 255
+            # 字形
+            if mrow[px]:
+                r, g, b = GLYPH
+                a = 255.0
 
-            # 再画主体
-            hit, bv = _x_coverage(fx, fy, scale)
-            if hit:
-                r, g, b = _shade_x(fy, bv, scale)
-                a = 255
+            buf[i] = int(r)
+            buf[i + 1] = int(g)
+            buf[i + 2] = int(b)
+            buf[i + 3] = int(a if a >= 255 else a)
 
-            buf[i] = r
-            buf[i + 1] = g
-            buf[i + 2] = b
-            buf[i + 3] = a
-
-    # 盒式降采样
+    # 盒式降采样抗锯齿
     out = bytearray(size * size * 4)
     n = ss * ss
     for y in range(size):
@@ -183,14 +270,15 @@ def main():
         d = os.path.join(RES, folder)
         os.makedirs(d, exist_ok=True)
 
-        ss = 3 if legacy <= 96 else 2
+        ss = 4 if legacy <= 96 else 3
         write_png(os.path.join(d, 'ic_launcher.png'), legacy, legacy,
-                  render(legacy, scale=1.0, with_bg=True, ss=ss))
+                  render(legacy, glyph_ratio=0.58, with_bg=True, ss=ss))
 
-        # 自适应图标前景：透明底，X 缩到安全区内（约 66/108）
-        ss2 = 3 if fg <= 216 else 2
+        # 自适应图标前景：透明底，字形留在安全区内
+        # （108dp 画布里安全直径 66dp，0.45 时四角刚好不越界）
+        ss2 = 4 if fg <= 216 else 3
         write_png(os.path.join(d, 'ic_launcher_foreground.png'), fg, fg,
-                  render(fg, scale=0.80, with_bg=False, ss=ss2))
+                  render(fg, glyph_ratio=0.45, with_bg=False, ss=ss2))
         print('done', folder, legacy, fg)
 
     anydpi = os.path.join(RES, 'mipmap-anydpi-v26')

@@ -34,10 +34,10 @@ class DetailPage extends StatelessWidget {
     final incomes = record.items.where((e) => e.isIncome).toList();
     final deductions = record.items.where((e) => e.isDeduction).toList();
     final incomeSum = incomes
-        .where((e) => !e.isCoefficient)
+        .where((e) => e.countsInTotal)
         .fold(0, (s, e) => s + e.amountCents);
     final deductionSum =
-        deductions.where((e) => !e.isCoefficient).fold(0, (s, e) => s + e.amountCents);
+        deductions.where((e) => e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
     final note = record.extra?['note'];
 
     return Scaffold(
@@ -260,8 +260,28 @@ class DetailPage extends StatelessWidget {
               child: Row(
                 children: [
                   Expanded(
-                    child: Text(item.name,
-                        style: const TextStyle(fontSize: 13.5, color: Color(0xFF3A3F3A))),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(item.name,
+                              style: const TextStyle(
+                                  fontSize: 13.5, color: Color(0xFF3A3F3A))),
+                        ),
+                        if (item.isDerived)
+                          Container(
+                            margin: const EdgeInsets.only(left: 5),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF2F4F2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text('推算',
+                                style: TextStyle(
+                                    fontSize: 9.5, color: Color(0xFF8A8F8A))),
+                          ),
+                      ],
+                    ),
                   ),
                   if (item.isCoefficient)
                     Text(
@@ -279,8 +299,10 @@ class DetailPage extends StatelessWidget {
                       formatCents(negative ? -item.amountCents : item.amountCents),
                       style: TextStyle(
                         fontSize: 13.5,
-                        fontWeight: FontWeight.w500,
-                        color: negative ? kDeduction : const Color(0xFF1B1C1B),
+                        fontWeight: item.isDerived ? FontWeight.w400 : FontWeight.w500,
+                        color: item.isDerived
+                            ? const Color(0xFF8A8F8A)
+                            : (negative ? kDeduction : const Color(0xFF1B1C1B)),
                       ),
                     ),
                 ],

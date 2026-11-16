@@ -61,6 +61,10 @@ enum ParsedRowKind {
   /// 正常明细项（收入或扣款）
   item,
 
+  /// 信息项：姓名、工号、部门、薪级对应基薪、出勤天数、加班时数……
+  /// 有值但不是钱，**不进入明细、不参与任何合计**
+  info,
+
   /// 应发合计
   totalGross,
 
@@ -86,6 +90,9 @@ class ParsedRow {
   final ParsedRowKind kind;
   final String raw;
 
+  /// 信息项的值（原文，不转金额）。如「工号」的 "199438"、「正常出勤天数」的 "20"
+  final String? infoValue;
+
   /// 来自第几张图（0 起）
   final int imageIndex;
 
@@ -99,6 +106,7 @@ class ParsedRow {
     required this.name,
     this.amountCents,
     this.coefficient,
+    this.infoValue,
     required this.kind,
     required this.raw,
     required this.imageIndex,
@@ -112,6 +120,7 @@ class ParsedRow {
         name: name ?? this.name,
         amountCents: amountCents,
         coefficient: coefficient,
+        infoValue: infoValue,
         kind: kind ?? this.kind,
         raw: raw,
         imageIndex: imageIndex,
@@ -142,6 +151,8 @@ class ParsedImage {
   });
 
   List<ParsedRow> get itemRows => rows.where((e) => e.kind == ParsedRowKind.item).toList();
+
+  List<ParsedRow> get infoRows => rows.where((e) => e.kind == ParsedRowKind.info).toList();
 
   ParsedRow? get grossRow => rows.where((e) => e.kind == ParsedRowKind.totalGross).firstOrNull;
   ParsedRow? get deductionRow =>

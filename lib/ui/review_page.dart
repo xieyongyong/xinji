@@ -127,6 +127,8 @@ class _ReviewPageState extends State<ReviewPage> {
     if (outcome != null) {
       _merge = outcome.result;
       _items.addAll(outcome.result.items);
+      // 姓名/工号/部门/基薪/出勤天数/加班时数这些**不算钱**的，单独进信息项
+      _infos.addAll(outcome.result.infos);
       for (final img in outcome.images) {
         _images.add(PayImage(
           filePath: img.filePath,
@@ -173,16 +175,27 @@ class _ReviewPageState extends State<ReviewPage> {
 
     final existInfo = _infos.map((e) => normalizeName(e.name)).toSet();
     for (final f in tpl.infoFields) {
-      if (existInfo.contains(normalizeName(f.name))) continue;
+      final key = normalizeName(f.name);
+      // "薪级" 与 "薪级对应基薪" 算同一个：识别到的那个更具体，模板那个就不要了
+      final covered = key.isNotEmpty &&
+          existInfo.any((e) => e.isNotEmpty && (e == key || e.contains(key) || key.contains(e)));
+      if (covered) continue;
       _infos.add(PayInfo(name: f.name, value: ''));
+      existInfo.add(key);
     }
   }
 
   // ------------------------------------------------------------ 绩效公式
 
   /// 基本绩效项的名称（用户可在模板里改名，这里做常见别名匹配）
-  static const List<String> _perfBaseNames = ['基本绩效', '绩效基数', '绩效标准', '绩效基本工资'];
-  static const List<String> _perfResultNames = ['绩效工资', '绩效奖金', '实发绩效'];
+  static const List<String> _perfBaseNames = [
+    '基本绩效', '绩效基数', '绩效基薪', '绩效标准', '绩效基本工资', '绩效工资基数',
+  ];
+
+  /// 实发绩效那一行的名称
+  static const List<String> _perfResultNames = [
+    '绩效工资', '实发绩效工资', '实发绩效', '绩效奖金', '本月绩效工资',
+  ];
 
   PayItemDraft? _findItem(List<String> names) {
     for (final item in _items) {
@@ -201,24 +214,70 @@ class _ReviewPageState extends State<ReviewPage> {
     return null;
   }
 
-  /// 绩效工资 = 基本绩效 × 绩效系数
+  /// 绩效公式，**正反两个方向都要能走**：
   ///
-  /// 只在设置里开启时才动，且三个要素（基本绩效、系数、绩效工资行）都齐全才计算，
-  /// 缺任何一个就保持手填 —— 绝不替用户猜。
+  /// - 正向（模板里有基本绩效且是手填的）：绩效工资 = 基本绩效 × 绩效系数
+  /// - 反向（工资条上只有系数和实发绩效）：基本绩效 = 实发绩效 ÷ 绩效系数
+  ///
+  /// 为什么必须支持反向：用户的工资条常年只印「本月绩效系数 1.1」和
+  /// 「实发绩效工资 1826」，基本绩效 1660 是要靠自己除出来的。
+  ///
+  /// 两条边界，是为了不跟工资条打架：
+  /// 1. 反推出来的基本绩效存成 [kValueDerived]，**不计入应发合计**
+  ///    —— 它的钱已经包含在实发绩效里，再加一遍会凭空多 1660；
+  /// 2. 只要基本绩效是"推算"的，就以工资条上的实发绩效为准（继续反推），
+  ///    绝不反过来改写实发绩效 —— 改了应发就对不上工资条上的应发小计。
+  ///    只有用户手填过基本绩效、且打开了自动计算，才走正向覆盖。
   void _applyPerfFormula() {
     final settings = context.read<AppSettings>();
-    if (!settings.perfAuto) return;
-
-    final base = _findItem(_perfBaseNames);
     final coefItem = _findCoefficientItem();
+    final coef = coefItem?.coefficient;
     final result = _findItem(_perfResultNames);
-    if (base == null || coefItem == null || result == null) return;
+    final base = _findItem(_perfBaseNames);
 
-    final computed = (base.amountCents * coefItem.coefficient!).round();
-    if (result.amountCents == computed) return;
+    // A. 正向：手填的基本绩效 × 系数 → 算绩效工资（需要用户明确开启）
+    if (settings.perfAuto &&
+        base != null &&
+        !base.isDerived &&
+        base.amountCents > 0 &&
+        coef != null &&
+        coef > 0 &&
+        result != null) {
+      final computed = (base.amountCents * coef).round();
+      if (result.amountCents != computed) result.amountCents = computed;
+      return;
+    }
 
-    // PayItemDraft 的字段是可变的，直接改即可
-    result.amountCents = computed;
+    // B. 反向：从实发绩效和系数反推基本绩效
+    //    （不受开关限制：它只写推算值，一个真实金额都不动）
+    final needDerive = base == null || base.isDerived || base.amountCents == 0;
+    if (!needDerive) return;
+    if (coef == null || coef <= 0) return;
+    if (result == null || result.amountCents <= 0) return;
+
+    final derived = (result.amountCents / coef).round();
+    // 除出来明显不合理的（系数或金额识别错）就不写，交给人工
+    if (derived <= 0 || derived > 100000000) return;
+
+    if (base != null) {
+      if (base.isDerived && base.amountCents == derived) return;
+      base.amountCents = derived;
+      // 反推值绝不能进合计，否则应发会比工资条多出一整个基本绩效
+      base.valueType = kValueDerived;
+      return;
+    }
+
+    // 插在绩效系数前面，视觉上就是「基数 ← 系数 → 结果」
+    final at = coefItem == null ? _items.length : _items.indexOf(coefItem);
+    _items.insert(
+      at < 0 ? _items.length : at,
+      PayItemDraft(
+        name: '基本绩效',
+        category: kCategoryIncome,
+        valueType: kValueDerived,
+        amountCents: derived,
+      ),
+    );
   }
 
   @override
@@ -236,11 +295,11 @@ class _ReviewPageState extends State<ReviewPage> {
   // ------------------------------------------------------------ 计算
 
   int get _incomeSum => _items
-      .where((e) => e.category == kCategoryIncome && e.valueType == kValueAmount)
+      .where((e) => e.category == kCategoryIncome && e.countsInTotal)
       .fold(0, (s, e) => s + e.amountCents);
 
   int get _deductionSum => _items
-      .where((e) => e.category == kCategoryDeduction && e.valueType == kValueAmount)
+      .where((e) => e.category == kCategoryDeduction && e.countsInTotal)
       .fold(0, (s, e) => s + e.amountCents);
 
   int? _parseCtrl(TextEditingController c) {
@@ -464,9 +523,9 @@ class _ReviewPageState extends State<ReviewPage> {
           if (_merge != null) _mergeSummary(),
           _periodCard(),
           const SizedBox(height: 14),
-          if (context.watch<AppSettings>().perfAuto &&
-              _findItem(_perfBaseNames) != null &&
-              _findCoefficientItem() != null) ...[
+          if (_findCoefficientItem() != null &&
+              (_findItem(_perfBaseNames) != null ||
+                  _findItem(_perfResultNames) != null)) ...[
             _perfHint(),
             const SizedBox(height: 10),
           ],
@@ -818,17 +877,31 @@ class _ReviewPageState extends State<ReviewPage> {
                   fontWeight: FontWeight.w500,
                 ),
               )
-            else
+            else ...[
+              if (item.isDerived)
+                Container(
+                  margin: const EdgeInsets.only(right: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF2F4F2),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('推算',
+                      style: TextStyle(fontSize: 9.5, color: Color(0xFF8A8F8A))),
+                ),
               Text(
                 formatCents(item.category == kCategoryDeduction
                     ? -item.amountCents
                     : item.amountCents),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13.5,
-                  fontWeight: FontWeight.w500,
-                  color: Color(0xFF1B1C1B),
+                  fontWeight: item.isDerived ? FontWeight.w400 : FontWeight.w500,
+                  color: item.isDerived
+                      ? const Color(0xFF8A8F8A)
+                      : const Color(0xFF1B1C1B),
                 ),
               ),
+            ],
             const SizedBox(width: 6),
             const Icon(Icons.edit_outlined, size: 14, color: Color(0xFFC4C9C4)),
           ],
@@ -837,12 +910,29 @@ class _ReviewPageState extends State<ReviewPage> {
     );
   }
 
-  /// 绩效公式提示条：告诉用户"这行是算出来的，不是手填的"
+  /// 绩效提示条：告诉用户"这行是算出来的，不是手填的"
   Widget _perfHint() {
+    final auto = context.watch<AppSettings>().perfAuto;
     final base = _findItem(_perfBaseNames);
     final coefItem = _findCoefficientItem();
-    final baseText = base == null ? '基本绩效' : base.name;
+    final result = _findItem(_perfResultNames);
     final coef = coefItem?.coefficient;
+    final baseText = base?.name ?? '基本绩效';
+
+    String text;
+    if (coef == null) {
+      text = '填上绩效系数后，可用「$baseText × 系数」或「绩效工资 ÷ 系数」自动核对';
+    } else if (base != null && base.amountCents > 0 && !base.isDerived) {
+      text = '$baseText ${formatCents(base.amountCents)} × ${coef.toStringAsFixed(2)}'
+          ' = ${formatCents((base.amountCents * coef).round())}'
+          '${auto ? '（已自动写入绩效工资）' : '（自动计算未开启，不会覆盖你填的值）'}';
+    } else if (base != null && base.amountCents > 0) {
+      text = '绩效工资 ${formatCents(result?.amountCents ?? 0)} ÷ ${coef.toStringAsFixed(2)}'
+          ' 反推 $baseText ${formatCents(base.amountCents)}（推算值，不计入合计）';
+    } else {
+      text = '填好绩效系数和绩效工资后，会自动反推$baseText';
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
@@ -855,10 +945,7 @@ class _ReviewPageState extends State<ReviewPage> {
           const SizedBox(width: 7),
           Expanded(
             child: Text(
-              coef == null
-                  ? '$baseText × 绩效系数 自动计算（系数未填，先填系数）'
-                  : '$baseText ${formatCents(base?.amountCents ?? 0)} × ${coef.toStringAsFixed(2)}'
-                      ' = 绩效工资自动更新',
+              text,
               style: const TextStyle(fontSize: 11.8, color: Color(0xFF3D5A54), height: 1.4),
             ),
           ),
@@ -1201,14 +1288,16 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
   late TextEditingController _nameCtrl;
   late TextEditingController _valueCtrl;
   late String _category;
-  late bool _isCoefficient;
+  late String _valueType;
+
+  bool get _isCoefficient => _valueType == kValueCoefficient;
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.draft.name);
     _category = widget.draft.category;
-    _isCoefficient = widget.draft.valueType == kValueCoefficient;
+    _valueType = widget.draft.valueType;
     _valueCtrl = TextEditingController(
       text: _isCoefficient
           ? (widget.draft.coefficient == null
@@ -1245,7 +1334,7 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
       draft: PayItemDraft(
         name: name,
         category: _category,
-        valueType: _isCoefficient ? kValueCoefficient : kValueAmount,
+        valueType: _valueType,
         amountCents: amountCents,
         coefficient: coefficient,
       ),
@@ -1292,14 +1381,26 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
             ],
           ),
           const SizedBox(height: 10),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            dense: true,
-            value: _isCoefficient,
-            onChanged: (v) => setState(() => _isCoefficient = v),
-            title: const Text('这是一项系数（如绩效系数 1.20）',
-                style: TextStyle(fontSize: 12.5)),
+          SegmentedButton<String>(
+            showSelectedIcon: false,
+            style: const ButtonStyle(
+              visualDensity: VisualDensity.compact,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            segments: const [
+              ButtonSegment(
+                  value: kValueAmount, label: Text('金额', style: TextStyle(fontSize: 12))),
+              ButtonSegment(
+                  value: kValueCoefficient,
+                  label: Text('系数', style: TextStyle(fontSize: 12))),
+              ButtonSegment(
+                  value: kValueDerived,
+                  label: Text('推算', style: TextStyle(fontSize: 12))),
+            ],
+            selected: {_valueType},
+            onSelectionChanged: (s) => setState(() => _valueType = s.first),
           ),
+          const SizedBox(height: 10),
           TextField(
             controller: _valueCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -1313,6 +1414,17 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
               isDense: true,
             ),
           ),
+          if (_valueType == kValueDerived) ...[
+            const SizedBox(height: 8),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '推算值：由公式反推得到，能看到但不计入合计\n'
+                '（基本绩效 = 绩效工资 ÷ 绩效系数）',
+                style: TextStyle(fontSize: 11, height: 1.5, color: Color(0xFF9AA09A)),
+              ),
+            ),
+          ],
         ],
       ),
       actions: [

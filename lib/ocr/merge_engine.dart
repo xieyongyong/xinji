@@ -48,6 +48,11 @@ class PayItemDraft {
 
   bool get isIncome => category == kCategoryIncome;
 
+  /// 推算值（如反推出来的基本绩效）：不参与任何合计
+  bool get isDerived => valueType == kValueDerived;
+
+  bool get countsInTotal => valueType == kValueAmount;
+
   PayItem toPayItem({int? recordId, int sortOrder = 0, int? sourceImageId}) => PayItem(
         recordId: recordId,
         name: name,
@@ -63,6 +68,10 @@ class PayItemDraft {
 /// 多图合并结果
 class MergeResult {
   final List<PayItemDraft> items;
+
+  /// 信息项：姓名、工号、部门、基薪、出勤天数、加班时数……
+  /// 只记录、不计入合计，所以跟 [items] 分开走
+  final List<PayInfo> infos;
 
   /// 被自动判定为重复而去掉的行。可以给用户看、也可以撤回。
   final List<PayItemDraft> removedDuplicates;
@@ -81,6 +90,7 @@ class MergeResult {
 
   MergeResult({
     required this.items,
+    this.infos = const [],
     required this.removedDuplicates,
     required this.issues,
     required this.grossCents,
@@ -91,10 +101,10 @@ class MergeResult {
   });
 
   int get incomeSum =>
-      items.where((e) => e.isIncome).fold(0, (s, e) => s + e.amountCents);
+      items.where((e) => e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
 
   int get deductionSum =>
-      items.where((e) => !e.isIncome).fold(0, (s, e) => s + e.amountCents);
+      items.where((e) => !e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
 
   int get netComputed => incomeSum - deductionSum;
 
@@ -144,8 +154,13 @@ class MergeEngine {
     final perImageAmbiguous = <List<ParsedRow>>[];
 
     for (final img in images) {
+      // 系数行（绩效系数 1.1）也要参与重叠比对：
+      // 真实截图的分页处经常正好停在"绩效系数/实发绩效工资"这一行，
+      // 如果把它排除掉，就会误报"两张图没有重叠、可能漏截"。
       perImageItems.add(
-        img.rows.where((e) => e.kind == ParsedRowKind.item && e.hasAmount).toList(),
+        img.rows
+            .where((e) => e.kind == ParsedRowKind.item && (e.hasAmount || e.coefficient != null))
+            .toList(),
       );
       perImageTotals.add(_ImageTotals.from(img));
       perImageAmbiguous.add(
@@ -153,9 +168,36 @@ class MergeEngine {
       );
     }
 
+    // ---- 1.5 信息项：按名称去重，先出现的先占位，后面的只补空值 ----
+    //
+    // 为什么不做重叠检测：信息项都在第一张图顶部（姓名、工号那一块），
+    // 而且同名同值，谁先谁后不影响结果。
+    final infos = <PayInfo>[];
+    final infoAt = <String, int>{};
+    for (final img in images) {
+      for (final r in img.rows) {
+        if (r.kind != ParsedRowKind.info) continue;
+        final v = (r.infoValue ?? '').trim();
+        if (v.isEmpty) continue;
+        final key = normalizeName(r.name);
+        if (key.isEmpty) continue;
+        final at = infoAt[key];
+        if (at == null) {
+          infoAt[key] = infos.length;
+          infos.add(PayInfo(name: r.name.trim(), value: v, sortOrder: infos.length));
+        } else if (infos[at].value.isEmpty) {
+          infos[at] = infos[at].copyWith(value: v);
+        }
+      }
+    }
+
     // ---- 2. 逐图拼接，检测重叠 ----
     final stitched = <ParsedRow>[];
     var overlapRemoved = 0;
+
+    // "没找到重叠"先压着不报 —— 真实截图经常正好断在小节标题（代扣款项）上，
+    // 标题行不进明细序列，于是必然匹配不上。等下面把合计核对完再决定要不要吓用户。
+    final pendingNoOverlap = <MergeIssue>[];
 
     if (perImageItems.isNotEmpty) stitched.addAll(perImageItems.first);
 
@@ -180,13 +222,13 @@ class MergeEngine {
           prev.any((e) => _sameRow(e, next.first));
 
       if (weakDup) {
-        issues.add(MergeIssue(
+        pendingNoOverlap.add(MergeIssue(
           MergeIssueType.noOverlap,
           '第${i}张与第${i + 1}张的重叠部分不完整（可能从一行中间切开），'
               '已按顺序拼接，请重点核对交界处两行',
         ));
       } else if (perImageItems[i].isNotEmpty && prev.isNotEmpty) {
-        issues.add(MergeIssue(
+        pendingNoOverlap.add(MergeIssue(
           MergeIssueType.noOverlap,
           '第${i}张与第${i + 1}张之间没有识别到重叠内容，'
               '可能中间漏截了一段，请对照原图确认没有漏项',
@@ -212,6 +254,11 @@ class MergeEngine {
     var deductionTotal = _vote(perImageTotals.map((e) => e.deduction).toList());
     var net = _vote(perImageTotals.map((e) => e.net).toList());
 
+    // 工资条自己印了合计没有？只有印了，后面的"核对通过"才算数
+    final grossFromSlip = gross != null;
+    final deductionFromSlip = deductionTotal != null;
+    final netFromSlip = net != null;
+
     // ---- 5. 转草稿并判定收入/扣款 ----
     final items = deduped.map(_toDraft).toList();
 
@@ -222,8 +269,10 @@ class MergeEngine {
       ));
     }
 
-    final incomeSum = items.where((e) => e.isIncome).fold(0, (s, e) => s + e.amountCents);
-    final deductionSum = items.where((e) => !e.isIncome).fold(0, (s, e) => s + e.amountCents);
+    final incomeSum =
+        items.where((e) => e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
+    final deductionSum =
+        items.where((e) => !e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
 
     // ---- 6. 模糊"合计"行的归属：用它等于哪组明细之和来判断 ----
     for (final list in perImageAmbiguous) {
@@ -263,12 +312,15 @@ class MergeEngine {
     });
 
     // ---- 9. 合计校验（发现漏行/多行的最强信号）----
+    var totalsVerified = false;
     if (gross != null && (incomeSum - gross).abs() > 1) {
       issues.add(MergeIssue(
         MergeIssueType.totalMismatch,
         '收入明细合计 ${formatCents(incomeSum)}，与工资条应发合计 ${formatCents(gross)} '
             '相差 ${formatCents((incomeSum - gross).abs())}，可能有漏识别或重复项',
       ));
+    } else if (grossFromSlip) {
+      totalsVerified = true;
     }
     if (net != null && (incomeSum - deductionSum - net).abs() > 1) {
       issues.add(MergeIssue(
@@ -276,7 +328,22 @@ class MergeEngine {
         '应发减代扣 = ${formatCents(incomeSum - deductionSum)}，'
             '与工资条实发 ${formatCents(net)} 不一致，请核对代扣项',
       ));
+    } else if (netFromSlip) {
+      totalsVerified = true;
     }
+    if (deductionTotal != null && (deductionSum - deductionTotal).abs() > 1) {
+      issues.add(MergeIssue(
+        MergeIssueType.totalMismatch,
+        '代扣明细合计 ${formatCents(deductionSum)}，与工资条应扣合计 '
+            '${formatCents(deductionTotal)} 相差 '
+            '${formatCents((deductionSum - deductionTotal).abs())}，请核对代扣项',
+      ));
+    } else if (deductionFromSlip) {
+      totalsVerified = true;
+    }
+
+    // 明细能和工资条上的合计对上，就说明没漏截，之前压着的"没找到重叠"不必吓用户
+    if (!totalsVerified) issues.addAll(pendingNoOverlap);
 
     if (removedRows.isNotEmpty) {
       issues.add(MergeIssue(
@@ -287,6 +354,7 @@ class MergeEngine {
 
     return MergeResult(
       items: items,
+      infos: infos,
       removedDuplicates: removedRows.map(_toDraft).toList(),
       issues: issues,
       grossCents: gross,
@@ -383,7 +451,7 @@ class MergeEngine {
     const deductionWords = [
       '社保', '社会保险', '公积金', '所得税', '个税', '个人所得税', '扣款', '扣除',
       '代扣', '水电', '管理费', '罚款', '借款', '养老', '医疗', '失业', '工伤',
-      '补充养老', '企业年金', '食宿', '住宿费', '押金',
+      '补充养老', '企业年金', '食宿', '住宿费', '押金', '伙食', '餐费',
     ];
     for (final w in deductionWords) {
       if (name.contains(w)) return kCategoryDeduction;

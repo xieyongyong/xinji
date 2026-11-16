@@ -402,9 +402,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (v) => settings.setPerfAuto(v),
                   title: const Text('绩效工资自动计算', style: TextStyle(fontSize: 14)),
                   subtitle: const Text(
-                    '开启后：绩效工资 = 基本绩效 × 绩效系数（三项都在才算）',
-                    style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A)),
+                    '开启后：绩效工资 = 基本绩效 × 绩效系数。\n'
+                    '没填基本绩效时，一律按「绩效工资 ÷ 系数」反推（推算值不计入合计）',
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
                   ),
+                  isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: const Icon(Icons.functions, size: 20, color: Color(0xFF4A4F4A)),
                 ),
