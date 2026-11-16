@@ -448,8 +448,11 @@ class _SettingsPageState extends State<SettingsPage> {
               _card([
                 _item(
                   icon: Icons.info_outline,
-                  title: '薪迹 1.3.0',
-                  subtitle: '记录 ${state.records.length} 条',
+                  // 不写版本号：CI 用 1.0.<构建号> 覆盖 build-name，
+                  // 这里写死一个版本反而和系统里显示的打架
+                  title: '薪迹 · 本地存档',
+                  subtitle: '共记录 ${state.records.length} 条'
+                      '（${state.employers.length} 家雇主）',
                 ),
                 const Divider(height: 1),
                 const Padding(
