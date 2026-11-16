@@ -14,7 +14,6 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.common.sdkinternal.MlKitContext
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
@@ -88,13 +87,13 @@ class OcrService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // 独立进程里没有任何插件帮我们初始化 ML Kit，必须自己来。
-        // 主进程已经 init 过一次不影响 —— 那是另一个进程的静态状态。
-        try {
-            MlKitContext.init(applicationContext)
-        } catch (_: Throwable) {
-            // 已经初始化过就忽略，绝不让这一步把识别挡死
-        }
+        // 这里**不能**写 MlKitContext.init(applicationContext)：
+        // 那是 @RestrictTo 的内部 API，对应的 ML Kit 版本里根本没有可调用的
+        // init，Kotlin 侧直接编译不过（Unresolved reference: init）。
+        //
+        // 也不需要手动初始化：com.google.mlkit:common 在 manifest 里注册了
+        // MlKitInitProvider，ContentProvider 在**每个进程**启动时都会被创建，
+        // 所以 :ocr 这个独立进程里的 ML Kit 已经就绪了。
         trace("服务启动 pid=${android.os.Process.myPid()}")
     }
 
