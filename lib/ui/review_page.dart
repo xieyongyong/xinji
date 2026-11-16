@@ -1658,6 +1658,7 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
               ),
             ),
           ],
+          ],
         ),
       ),
       actions: [
