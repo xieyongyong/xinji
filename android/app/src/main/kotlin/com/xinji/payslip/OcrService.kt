@@ -1,6 +1,7 @@
 package com.xinji.payslip
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -87,14 +88,63 @@ class OcrService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        // 这里**不能**写 MlKitContext.init(applicationContext)：
-        // 那是 @RestrictTo 的内部 API，对应的 ML Kit 版本里根本没有可调用的
-        // init，Kotlin 侧直接编译不过（Unresolved reference: init）。
-        //
-        // 也不需要手动初始化：com.google.mlkit:common 在 manifest 里注册了
-        // MlKitInitProvider，ContentProvider 在**每个进程**启动时都会被创建，
-        // 所以 :ocr 这个独立进程里的 ML Kit 已经就绪了。
         trace("服务启动 pid=${android.os.Process.myPid()}")
+        ensureMlKit()
+    }
+
+    /**
+     * 初始化 ML Kit。
+     *
+     * ## 为什么必须手动做、而且只能用反射
+     * ML Kit 靠 `com.google.mlkit:common` 里注册的 ContentProvider 自动初始化，
+     * 但那套初始化在**独立进程里没执行**（实测日志：
+     * `IllegalStateException: MlKitContext has not been initialized`）。
+     *
+     * 而 `MlKitContext.init(Context)` 是 `@RestrictTo` 的包级私有方法，
+     * Kotlin 直接写会报 `Unresolved reference: init`（上一版构建就卡在这里）。
+     *
+     * 所以这里用反射：不认方法名（版本之间改过名），只按
+     * 「静态方法 + 唯一参数是 Context」来找，找到就调。
+     * 每一步结果都写进 ocr_trace.log，下次出问题能直接看出卡在哪。
+     */
+    private fun ensureMlKit() {
+        val cls = try {
+            Class.forName("com.google.mlkit.common.sdkinternal.MlKitContext")
+        } catch (t: Throwable) {
+            trace("找不到 MlKitContext：${describe(t)}")
+            return
+        }
+
+        // 已经初始化过就别重复调，会抛 IllegalStateException
+        try {
+            cls.getMethod("getInstance").invoke(null)
+            trace("MlKit 已初始化，跳过")
+            return
+        } catch (_: Throwable) {
+            // 未初始化，继续往下走
+        }
+
+        for (m in cls.declaredMethods) {
+            if (!java.lang.reflect.Modifier.isStatic(m.modifiers)) continue
+            if (m.parameterTypes.size != 1) continue
+            if (m.parameterTypes[0] != Context::class.java) continue
+            try {
+                m.isAccessible = true
+                m.invoke(null, applicationContext)
+                trace("MlKit 反射初始化成功（${m.name}）")
+                return
+            } catch (t: Throwable) {
+                trace("MlKit 反射初始化失败（${m.name}）：${describe(t)}")
+            }
+        }
+
+        trace("MlKit 初始化没有成功，识别会直接报错")
+    }
+
+    /** 反射调用失败时真正的原因藏在 targetException 里 */
+    private fun describe(t: Throwable): String {
+        val real = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+        return "${real.javaClass.simpleName}: ${real.message}"
     }
 
     override fun onDestroy() {
