@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
         网络权限：只为了「检查更新」这一个功能（v1.9 起）。
@@ -17,6 +18,19 @@
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
     <!--
+        应用内更新：下载放前台 Service，完成后调系统安装器。
+        INTERNET 上面已经声明；下面四个分别是：
+        - 前台服务：Android 8+ 长时间下载必须有可见通知
+        - dataSync 类型：Android 14+ 前台服务必须声明类型
+        - 通知权限：Android 13+ 要不要弹通知由用户决定，不弹也不影响下载
+        - 安装未知来源：调起系统安装器时系统会再确认一次
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
         也【故意】没有声明 CAMERA 权限。
         image_picker 是调系统相机 App 拍照取回结果，属于「委托拍照」，
         此时如果本 App 声明了 CAMERA 权限却没有运行时申请，会直接抛 SecurityException。
@@ -31,7 +45,10 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:fullBackupContent="false"
-        android:largeHeap="true">
+        android:largeHeap="true"
+        android:theme="@style/NormalTheme"
+        tools:replace="android:theme,android:allowBackup,android:icon,android:label"
+        tools:remove="android:roundIcon,android:supportsRtl">
 
         <!--
             文字识别服务，跑在独立进程 :ocr。
@@ -49,6 +66,27 @@
             android:process=":ocr"
             android:exported="false"
             android:stopWithTask="true" />
+
+        <!--
+            应用内更新用的下载服务，跑在主进程（不占 OCR 进程的内存）。
+            前台服务 + 进度通知：下载期间用户可以继续查工资、录数据，
+            不用停在更新页等；下载完点通知才调系统安装器。
+        -->
+        <service
+            android:name=".UpdateDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 把私有目录里的 APK 临时授权给系统安装器读一下，不必放开整个文件系统 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
 
         <activity
             android:name=".MainActivity"

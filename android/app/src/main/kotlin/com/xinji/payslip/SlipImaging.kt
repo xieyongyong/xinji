@@ -151,7 +151,7 @@ object SlipImaging {
             out.add(
                 mapOf(
                     "path" to file.absolutePath,
-                    // 偏移换到识别图坐标系，保证和 ML Kit 返回的 y 同尺度
+                    // 偏移换到识别图坐标系，保证和识别结果的 y 同尺度
                     "top" to (start * scale).toInt(),
                     "width" to bmp.width,
                     "height" to bmp.height,

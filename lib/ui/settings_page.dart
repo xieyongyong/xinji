@@ -597,8 +597,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: Text(
                     '所有工资数据、工资条图片都只存在这台手机里，'
                     '不上传、不同步，识别也全部在本机完成。\n\n'
-                    '唯一会联网的地方是「检查更新」：只向 GitHub 读一下最新版本号，'
-                    '不会带走任何数据。\n\n'
+                    '唯一会联网的地方是「检查更新 / 应用内更新」：向 GitHub 读版本号、'
+                    '下载安装包，不会上传任何数据。\n\n'
                     '卸载 App 会连同数据一起删除，请定期导出备份。',
                     style: TextStyle(fontSize: 12, height: 1.8, color: Color(0xFF8A8F8A)),
                   ),

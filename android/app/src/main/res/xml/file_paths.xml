@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    应用内更新专用：只把「应用私有目录下的 update/」授权给系统安装器。
+    不开放整个外部存储，也不开放数据库/备份目录。
+-->
+<paths>
+    <external-files-path
+        name="apk"
+        path="update/" />
+    <files-path
+        name="apk_private"
+        path="update/" />
+</paths>

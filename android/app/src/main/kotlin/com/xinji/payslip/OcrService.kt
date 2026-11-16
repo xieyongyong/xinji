@@ -23,10 +23,11 @@ import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /**
- * 真正的文字识别，跑在**独立进程**（`:ocr`）里，引擎只有一个：PP-OCRv6（small）。
+ * 真正的文字识别，跑在**独立进程**（`:ocr`）里。
+ * 引擎只有一个：RapidOCR4j + PP-OCRv6_small + OpenCV 预处理。
  *
  * ## 为什么还留在独立进程
- * 换了引擎不等于不需要隔离。ONNX Runtime 是 native 库，同样会因为
+ * RapidOCR 底下是 ONNX Runtime + OpenCV 两套 native 库，同样会因为
  * 设备内存紧张、so 和 CPU 架构不匹配、模型文件被裁坏而直接让进程消失。
  * 那种死法 Dart 层连异常都收不到（进程整个没了，日志里只剩半句），
  * 所以识别继续放在独立进程：
@@ -34,9 +35,9 @@ import kotlin.math.abs
  * 图片早就存好了，用户不用重新截图。
  *
  * ## 为什么没有引擎开关了
- * 上一版留了 ML Kit 当兜底（设置里可切「兼容模式」）。实测它认不准工资条
- * 上的密集数字（小数点、千分位、相邻列串行），留着只是让「识别不准」
- * 这件事有两条路径、两套 bug。这一版直接删干净：一个引擎、一条链路。
+ * ML Kit 早已删干净：它认不准工资条上的密集数字（小数点、千分位、相邻列
+ * 串行），留着只是让「识别不准」这件事有两条路径、两套 bug。
+ * 现在一个引擎、一条链路。
  */
 class OcrService : Service() {
 
@@ -57,7 +58,7 @@ class OcrService : Service() {
     }
 
     private val worker = Executors.newSingleThreadExecutor()
-    private var ppEngine: PpOcrEngine? = null
+    private var ocrEngine: RapidOcrEngine? = null
     private var selfTested = false
 
     private val handler = Handler(Looper.getMainLooper()) { msg ->
@@ -84,10 +85,8 @@ class OcrService : Service() {
     }
 
     override fun onDestroy() {
-        try {
-            ppEngine?.close()
-        } catch (_: Throwable) {
-        }
+        // RapidOCR 没有 close()：ONNX session 和 OpenCV Mat 由 GC 回收。
+        // 进程退出时系统会一并收掉 native 资源，这里不能调不存在的方法。
         worker.shutdownNow()
         super.onDestroy()
     }
@@ -148,7 +147,7 @@ class OcrService : Service() {
             }
             canvas.drawText("薪迹 1234", 14f, 72f, paint)
 
-            val hits = ensurePpEngine().recognize(bmp)
+            val hits = ensureOcrEngine().recognize(bmp)
             val text = hits.joinToString("") { it.text }.trim()
             trace("自检 通过「${text.take(24)}」(${hits.size} 段)")
             selfTested = true
@@ -157,12 +156,12 @@ class OcrService : Service() {
         }
     }
 
-    private fun ensurePpEngine(): PpOcrEngine {
-        ppEngine?.let { return it }
-        val created = PpOcrEngine(this) { line -> trace(line) }
+    private fun ensureOcrEngine(): RapidOcrEngine {
+        ocrEngine?.let { return it }
+        val created = RapidOcrEngine(this) { line -> trace(line) }
         created.ensureLoaded()
         trace(created.loadInfo)
-        ppEngine = created
+        ocrEngine = created
         return created
     }
 
@@ -209,8 +208,8 @@ class OcrService : Service() {
                 val bmp = BitmapFactory.decodeFile(tilePath)
                     ?: throw IllegalStateException("第 ${ti + 1} 块图片解码失败")
                 val started = System.currentTimeMillis()
-                val hits: List<PpOcrEngine.Hit> = try {
-                    ensurePpEngine().recognize(bmp)
+                val hits: List<RapidOcrEngine.Hit> = try {
+                    ensureOcrEngine().recognize(bmp)
                 } finally {
                     // 一块 1600x1400 的位图就是 9MB，用完立刻放
                     bmp.recycle()
@@ -265,10 +264,11 @@ class OcrService : Service() {
                 msg.contains("NoSuchMethod", true) ||
                 msg.contains("NoClassDefFound", true) ||
                 msg.contains("loadLibrary", true) ||
-                msg.contains("onnxruntime", true) ->
-                "识别引擎（ONNX Runtime）在这台机器上装不起来：$msg"
+                msg.contains("onnxruntime", true) ||
+                msg.contains("opencv", true) ->
+                "识别引擎（RapidOCR / OpenCV）在这台机器上装不起来：$msg"
             msg.contains("onnx", true) || msg.contains("模型", true) ->
-                "PP-OCR 模型加载失败：$msg"
+                "PP-OCRv6 模型加载失败：$msg"
             msg.contains("out of memory", true) || msg.contains("OOM", true) ->
                 "内存不足，这张图太长，可以裁成两张再导入"
             else -> msg

@@ -7,14 +7,19 @@ import '../core/app_update.dart';
 /// [auto] = true 表示这是启动时自动查到的：用户选「以后再说」就记下这个版本，
 /// 之后不再为同一个版本弹第二次（不然每次开 App 都被拦一下很烦）。
 ///
-/// 返回值 true 表示用户点了「去下载」。
+/// 返回值 true 表示用户选择了某种更新方式。
+///
+/// ## 默认不跳浏览器
+/// 「立即更新」只是**启动原生后台下载**，立刻关掉弹窗；下载在独立的前台服务里跑，
+/// 用户可以继续查工资。完成后首页顶部出现一条「点此安装」，
+/// 点它才调系统安装器 —— 不会在用户正录数据的时候突然弹安装页。
 Future<bool> showUpdateDialog(
   BuildContext context,
   ReleaseInfo release, {
   required String currentVersion,
   bool auto = false,
 }) async {
-  final go = await showDialog<bool>(
+  final choice = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: Row(
@@ -56,7 +61,8 @@ Future<bool> showUpdateDialog(
               ],
               const SizedBox(height: 12),
               const Text(
-                '覆盖安装即可，工资数据、模板和图片都会保留（版本号只增不减）。',
+                '点「立即更新」后会在后台下载，期间可以照常使用 App；'
+                '下载完在首页点一下即可安装，数据原样保留。',
                 style: TextStyle(fontSize: 11.5, height: 1.6, color: Color(0xFF9AA09A)),
               ),
             ],
@@ -65,33 +71,58 @@ Future<bool> showUpdateDialog(
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
+          onPressed: () => Navigator.pop(ctx, 'later'),
           child: Text(auto ? '以后再说' : '关闭'),
         ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'browser'),
+          child: const Text('浏览器下载', style: TextStyle(fontSize: 12.5)),
+        ),
         FilledButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('去下载'),
+          onPressed: () => Navigator.pop(ctx, 'background'),
+          child: const Text('立即更新'),
         ),
       ],
     ),
   );
 
-  if (go != true) {
+  if (choice == null || choice == 'later') {
     if (auto) await UpdateChecker.skipVersion(release.version);
     return false;
   }
 
+  if (choice == 'browser') {
+    try {
+      await UpdateChecker.openUrl(release.apkUrl);
+      return true;
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('没能打开浏览器：$e')),
+        );
+      }
+      return false;
+    }
+  }
+
   try {
-    // 直接开 APK 直链：浏览器会立刻开始下载，下完点一下就是安装
-    await UpdateChecker.openUrl(release.apkUrl);
+    await UpdateDownloadController.instance.start(release);
   } catch (e) {
-    // 打不开浏览器基本只有一种情况：系统没有默认浏览器
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('没能打开浏览器：$e')),
+        SnackBar(content: Text('没能启动后台下载：$e')),
       );
     }
     return false;
+  }
+
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('已在后台下载，可以继续用 App；下载完在首页点「安装」'),
+        duration: Duration(seconds: 4),
+      ),
+    );
   }
   return true;
 }

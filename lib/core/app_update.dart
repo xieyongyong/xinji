@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -32,6 +34,41 @@ class UpdateChecker {
   static const String _kSkipVersion = 'update_skip_version';
 
   static const MethodChannel _channel = MethodChannel(_channelName);
+  static const EventChannel _updateEvents = EventChannel('xinji/update_progress');
+
+  /// 后台下载的状态流。原生侧在下载线程推进度，页面只管订阅。
+  static Stream<UpdateState> get updateStream {
+    return _updateEvents.receiveBroadcastStream().map((event) {
+      if (event is Map) return UpdateState.fromMap(Map<String, dynamic>.from(event));
+      return const UpdateState();
+    });
+  }
+
+  /// 启动后台下载：立刻返回，下载在原生前台服务里跑，用户可以继续操作 App。
+  static Future<void> startDownload(ReleaseInfo release) async {
+    await _channel.invokeMethod<bool>('download', {
+      'url': release.apkUrl,
+      'version': release.version,
+    });
+  }
+
+  static Future<void> cancelDownload() =>
+      _channel.invokeMethod<bool>('cancelDownload');
+
+  static Future<void> installDownloaded() =>
+      _channel.invokeMethod<bool>('installApk');
+
+  static Future<UpdateState> downloadStatus() async {
+    try {
+      final raw = await _channel.invokeMethod<dynamic>('downloadStatus');
+      if (raw is! Map) return const UpdateState();
+      return UpdateState.fromMap(
+        Map<String, dynamic>.from(raw.map((k, v) => MapEntry(k.toString(), v))),
+      );
+    } catch (_) {
+      return const UpdateState();
+    }
+  }
 
   /// 当前安装包的版本号（如 `1.9.0`）
   static Future<String> currentVersion() async {
@@ -220,6 +257,97 @@ class ReleaseInfo {
     if (publishedAt.length >= 10) return publishedAt.substring(0, 10);
     return publishedAt;
   }
+}
+
+/// 一次后台下载的当前状态。字段和 Kotlin 侧 `UpdateDownloadController.toMap` 一一对应。
+class UpdateState {
+  static const idle = 'idle';
+  static const downloading = 'downloading';
+  static const done = 'done';
+  static const failed = 'failed';
+  static const cancelled = 'cancelled';
+
+  final String status;
+  final int progress;
+  final int received;
+  final int total;
+  final String version;
+  final String? path;
+  final String? error;
+
+  const UpdateState({
+    this.status = idle,
+    this.progress = 0,
+    this.received = 0,
+    this.total = 0,
+    this.version = '',
+    this.path,
+    this.error,
+  });
+
+  factory UpdateState.fromMap(Map<String, dynamic> m) => UpdateState(
+        status: (m['status'] ?? idle).toString(),
+        progress: (m['progress'] is num) ? (m['progress'] as num).toInt() : 0,
+        received: (m['received'] is num) ? (m['received'] as num).toInt() : 0,
+        total: (m['total'] is num) ? (m['total'] as num).toInt() : 0,
+        version: (m['version'] ?? '').toString(),
+        path: m['path']?.toString(),
+        error: m['error']?.toString(),
+      );
+
+  bool get isDownloading => status == downloading;
+  bool get isDone => status == done && path != null && path!.isNotEmpty;
+}
+
+/// 全局下载状态：首页的细进度条和"安装"入口都读它。
+///
+/// 不用 Provider 是因为它只有一个实例、也不参与业务数据；
+/// 谁需要就 AnimatedBuilder 一下，页面退出也不会打断原生下载。
+class UpdateDownloadController extends ChangeNotifier {
+  static final UpdateDownloadController instance = UpdateDownloadController._();
+
+  UpdateDownloadController._();
+
+  UpdateState _state = const UpdateState();
+  StreamSubscription<UpdateState>? _sub;
+  bool _hidden = false;
+
+  UpdateState get state => _state;
+
+  /// 订阅原生状态流。可以重复调用，只会订阅一次。
+  void attach() {
+    if (_sub != null) return;
+    _sub = UpdateChecker.updateStream.listen((s) {
+      if (s.status != _state.status) _hidden = false;
+      _state = s;
+      notifyListeners();
+    });
+    // 服务可能比页面先启动：拿一次当前状态补上
+    UpdateChecker.downloadStatus().then((s) {
+      if (s.status != UpdateState.idle) {
+        _state = s;
+        notifyListeners();
+      }
+    });
+  }
+
+  Future<void> start(ReleaseInfo release) async {
+    attach();
+    _hidden = false;
+    await UpdateChecker.startDownload(release);
+  }
+
+  Future<void> cancel() => UpdateChecker.cancelDownload();
+
+  Future<void> install() => UpdateChecker.installDownloaded();
+
+  void hideBanner() {
+    _hidden = true;
+    notifyListeners();
+  }
+
+  bool get showDoneBanner => _state.isDone && !_hidden;
+  bool get showFailedBanner => _state.status == UpdateState.failed && !_hidden;
 }
 
 class UpdateException implements Exception {

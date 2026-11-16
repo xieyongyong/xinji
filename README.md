@@ -1,7 +1,7 @@
 # 薪迹 · 本地工资条记录与对比
 
 拍/截图导入工资条 → 离线 OCR 自动填表 → 按月归档 → 年度总览 → 两月逐项对比。
-**数据只存在手机里，不上传、不需要账号。**（唯一联网的地方是「检查更新」，只读版本号）
+**数据只存在手机里，不上传、不需要账号。**（唯一联网的地方是「检查更新 / 应用内更新」：读版本号、下载 APK）
 
 ---
 
@@ -11,7 +11,7 @@
 |---|---|
 | 多图导入 | 相册多选、拍照，支持一次导入多张 |
 | **多图重叠合并** | 按行序列检测相邻图的重叠区，自动去重；无重叠会告警；去重项可展开撤回 |
-| 离线 OCR | PP-OCRv6(small) + ONNX Runtime，模型随 APK 打包，全程本地推理 |
+| 离线 OCR | RapidOCR4j-Android + PP-OCRv6_small + OpenCV 预处理，ONNX Runtime 本地推理 |
 | 识别预填 | 项目名 / 金额 / 合计行 / 系数行自动分拣，口径不对会标黄 |
 | 合计校验 | 明细加总 ≠ 应发、应发−代扣 ≠ 实发 时提示，但不阻止保存 |
 | 手动录入 | 不用图片也能记 |
@@ -88,7 +88,7 @@ xinji/
 │       ├── lock_page.dart            解锁 / 设置锁 / 找回 PIN
 │       └── widgets/image_viewer.dart 原图查看
 ├── android/                          Android 工程配置（云构建用）
-│   ├── app/build.gradle.kts          minSdk 23、包名、签名、关混淆
+│   ├── app/build.gradle.kts          minSdk 29、包名、签名、关混淆
 │   ├── app/src/main/AndroidManifest.xml  应用名、生物识别权限、无网络权限
 │   ├── app/src/main/kotlin/.../MainActivity.kt  FlutterFragmentActivity（指纹必需）
 │   ├── app/keystore/xinji.jks        签名文件（改动会导致不能覆盖安装）
@@ -150,8 +150,9 @@ xinji/
    改完它会记住（你也可以去模板里加别名）。
 3. **卸载 App 会连数据一起删**。本地存储的必然代价，请定期导出备份。
 4. **忘记 PIN 只能靠提示语**。提示语也忘了，就只剩「清除数据重装」。
-5. **APK 体积约 80MB**。PP-OCRv6 的检测/识别模型（31MB）和两套 ABI 的 ONNX Runtime 都在包里，这是离线的代价。
+5. **APK 体积较大（约 150MB）**。PP-OCRv6 模型（31MB）、ONNX Runtime 和 OpenCV 两套 ABI 的 native 库都在包里，这是完全离线的代价。
 6. **检查更新需要仓库公开**。GitHub 不允许匿名读私有仓库的 Release，仓库改成 Public 之后这个功能才能用。
+7. **v2.0.0 起 minSdk 升到 29**。Android 10 及以下装不了；从旧版覆盖安装如失败，先导出备份再卸载重装。
 
 ---
 

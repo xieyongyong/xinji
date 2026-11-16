@@ -19,6 +19,7 @@ import 'settings_page.dart';
 import 'theme.dart';
 import 'stats_page.dart';
 import 'update_dialog.dart';
+import 'widgets/update_progress_strip.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -142,6 +143,9 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Column(
         children: [
+          // 后台下载更新时只占 3px；完成后变一条"点此安装"。
+          // 不弹窗、不跳转，用户继续查数据不受影响。
+          const UpdateProgressStrip(),
           if (state.employers.length > 1) _employerBar(state),
           _yearBar(years, year),
           _summaryStrip(summary),

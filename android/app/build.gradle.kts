@@ -34,19 +34,32 @@ android {
 
     defaultConfig {
         applicationId = "com.xinji.payslip"
-        // 23 是硬下限：local_auth（指纹/面容）从 API 23 才有 BiometricPrompt。
-        // 识别引擎换成 PP-OCR 之后**不需要再往上提**：
-        // onnxruntime-android 1.18 的 minSdk 就是 21，模型和推理都是我们自己写的，
-        // 没有依赖任何要求 API 29 的第三方 OCR 库。
-        minSdk = 23
+        // RapidOCR4j-Android 1.0.0 的硬要求：minSdk >= 29。
+        // 它内部用了 java.nio.file（API 26 起）并且作者只保证 29+；
+        // 我们的 PY/OpenCV 方案也依赖这个库自带的 opencv:4.9.0。
+        // 代价是从旧版覆盖安装会失败，需要备份数据后卸载重装一次。
+        minSdk = 29
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // 只打真机常见的两种 ARM 架构：ONNX Runtime 每个 ABI 的 so 都在 15MB 上下，
-        // 留 x86 只是让模拟器能跑，真机用不上，白占包体
+        // 只打真机常见的两种 ARM 架构：ONNX Runtime + OpenCV 每个 ABI 的 so
+        // 加起来 40MB 上下，留 x86 只是让模拟器能跑，真机用不上，白占包体
         ndk {
             abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
+    }
+
+    packagingOptions {
+        resources {
+            // RapidOCR4j 的 AAR 自带 PP-OCRv4 的 det/rec 模型（约 15MB），
+            // 我们改用 PP-OCRv6_small（assets/ppocr/ 下），这两个文件用不上。
+            // 注意 cls 模型**不能排除**：库构造时无条件会 new TextClassifier，
+            // 就算 useCls=false 也要能加载到那个模型。
+            excludes += listOf(
+                "assets/ch_PP-OCRv4_det_infer.onnx",
+                "assets/ch_PP-OCRv4_rec_infer.onnx"
+            )
         }
     }
 
@@ -68,8 +81,8 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
-            // 不开混淆：ONNX Runtime 的 JNI 按类名/方法名反射绑定，混淆后容易崩，
-            // 包大一点换稳定
+            // 不开混淆：RapidOCR4j 的类要被 ONNX Runtime / OpenCV 的 JNI 反射访问，
+            // 混淆后容易崩，包大一点换稳定
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -83,14 +96,15 @@ flutter {
 // ---------------------------------------------------------------- 原生依赖
 // 文字识别不走 Flutter 插件，由 OcrService 在 :ocr 进程里直接调。
 //
-// 唯一的引擎是 PP-OCRv6（small）：ONNX Runtime 跑 det + rec 两个模型，
-// 模型和字典在 assets/ppocr/ 下（约 31MB）：
-//   · 对工资条这种"表格 + 密集数字"的图，小数点、千分位比 ML Kit 稳得多
-//   · 完全离线，不依赖 Google Play 服务，国内机型也不用装 GMS
+// 引擎就是用户指定的那套：RapidOCR4j-Android + PP-OCRv6_small + OpenCV 预处理。
+//   · rapidocr4j-android:1.0.0 传递依赖 opencv:4.9.0 和 onnxruntime-android:1.18.0
+//   · 检测/识别模型和字典换成 PP-OCRv6_small，放在 assets/ppocr/（约 31MB）
+//   · OpenCV 负责灰度/CLAHE/去噪/二值化，RapidOCR 内部也用它做检测框后处理
 //
-// v1.9 起把 ML Kit 的两个依赖彻底删掉了（原先留作「兼容模式」兜底）：
-// 它认不准工资条上的数字，留着等于多一条出错路径、多 20MB 包体。
+// 完全离线、不依赖 Google Play 服务。ML Kit 早已删干净，没有第二条识别链路。
 dependencies {
+    implementation("io.github.hzkitty:rapidocr4j-android:1.0.0")
+    // 显式写一遍锁定版本：库本身也引这个，避免 Gradle 与其他传递依赖挑了旧版
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 }
 

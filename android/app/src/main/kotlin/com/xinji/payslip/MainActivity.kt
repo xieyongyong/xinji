@@ -3,6 +3,7 @@ package com.xinji.payslip
 import android.os.Bundle
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 /**
@@ -41,9 +42,31 @@ class MainActivity : FlutterFragmentActivity() {
             OcrBridge.handle(call, result, applicationContext)
         }
 
-        // App 自身信息通道：读版本号（检查更新用）、打开下载链接
+        // App 自身信息通道：读版本号、后台下载更新、打开下载链接（退路）。
+        // 这里传 this（Activity）而不是 applicationContext：Android 13+ 申请
+        // 通知权限必须有一个真实 Activity 作为上下文。
         MethodChannel(messenger, AppChannel.NAME).setMethodCallHandler { call, result ->
-            AppChannel.handle(call, result, applicationContext)
+            AppChannel.handle(call, result, this)
         }
+
+        // 下载进度流。下载服务在后台线程跑完就往这里推，
+        // 页面随时可以订阅/退订，退出页面不会中断下载。
+        EventChannel(messenger, AppChannel.UPDATE_EVENTS).setStreamHandler(
+            object : EventChannel.StreamHandler {
+                private var off: (() -> Unit)? = null
+
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    if (events == null) return
+                    off = UpdateDownloadController.listen { state ->
+                        events.success(UpdateDownloadController.toMap(state))
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    off?.invoke()
+                    off = null
+                }
+            }
+        )
     }
 }
