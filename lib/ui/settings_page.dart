@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -582,16 +583,19 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 诊断日志。
   ///
-  /// 原生层的内存崩溃抓不到堆栈，但 CrashLog.note 会在关键节点留面包屑：
-  /// 最后一条是"分块识别 7 块"，说明崩在识别阶段；
-  /// 停在"正在处理第 2 张"，说明崩在图片压缩阶段。
-  /// 对排查"闪退"这种没有报错的问题，这几乎是唯一线索。
+  /// 三类信息按「证据硬度」从高到低拼起来：
+  /// 1. `last_exit.txt` —— 系统记录的上次各进程死亡原因。
+  ///    这是 native 崩溃（Dart 完全抓不到）唯一的硬证据：
+  ///    `CRASH_NATIVE 信号=11` 是段错误，`LOW_MEMORY` 是内存不够被杀，
+  ///    看「进程=…:ocr」就知道崩的是识别进程还是主进程。
+  /// 2. `ocr_trace.log` —— 识别进程写的一行行面包屑，最后一行就是崩在哪一步。
+  /// 3. `crash.log` —— Dart 层能抓到的异常。
   Future<void> _showDiagnostics() async {
-    final text = await CrashLog.read();
+    final text = await _collectDiagnostics();
     if (!mounted) return;
     final lines = text.split('\n');
-    final tail = lines.length > 200
-        ? lines.sublist(lines.length - 200).join('\n')
+    final tail = lines.length > 240
+        ? lines.sublist(lines.length - 240).join('\n')
         : text;
     await showDialog<void>(
       context: context,
@@ -599,7 +603,7 @@ class _SettingsPageState extends State<SettingsPage> {
         title: const Text('诊断日志'),
         content: SizedBox(
           width: double.maxFinite,
-          height: 360,
+          height: 380,
           child: SingleChildScrollView(
             child: SelectableText(
               tail.trim().isEmpty ? '暂无记录。说明还没发生过异常。' : tail,
@@ -623,6 +627,30 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
+  }
+
+  /// 拼装诊断信息。任何一步读不到都跳过，绝不因为诊断本身抛异常
+  Future<String> _collectDiagnostics() async {
+    final buf = StringBuffer();
+    buf.writeln('系统：${Platform.operatingSystemVersion}');
+    try {
+      final dir = await getApplicationSupportDirectory();
+      for (final name in ['last_exit.txt', 'ocr_trace.log']) {
+        final f = File('${dir.path}/$name');
+        if (!await f.exists()) continue;
+        var content = await f.readAsString();
+        if (content.length > 3000) {
+          content = content.substring(content.length - 3000);
+        }
+        buf.writeln('\n===== $name =====');
+        buf.writeln(content.trim());
+      }
+    } catch (_) {
+      // 私有目录读不到就只给 crash.log
+    }
+    buf.writeln('\n===== crash.log =====');
+    buf.write(await CrashLog.read());
+    return buf.toString();
   }
 
   /// 「录入与显示」里的模板摘要：一句话说清当前公司在用什么

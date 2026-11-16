@@ -230,25 +230,20 @@ class AppState extends ChangeNotifier {
     final parser = FieldParser(templates);
     final parsed = <ParsedImage>[];
 
+    // 一次把整批交给原生（独立进程）。万一那边崩了，这里收到的是普通异常，
+    // 不是"整个 App 消失"；图片早就在第 79 行存好了，用户可以直接手动填。
+    final recognized = await _recognizeAll(filePaths);
+
     for (var i = 0; i < filePaths.length; i++) {
       final path = filePaths[i];
-      final OcrText recognized;
-      try {
-        recognized = await ocr.recognizeFile(path);
-      } on OcrException catch (e) {
-        // 带上"第几张"，用户才知道该重新截哪一张
-        throw OcrException('第 ${i + 1} 张图识别失败：${e.message}');
-      } catch (e) {
-        throw OcrException('第 ${i + 1} 张图识别失败：$e');
-      }
       final keep = (keepPaths != null && i < keepPaths.length && keepPaths[i].isNotEmpty)
           ? keepPaths[i]
           : path;
       parsed.add(parser.parseImage(
         index: i,
         filePath: keep,
-        lines: recognized.lines,
-        rawText: recognized.fullText,
+        lines: recognized[i].lines,
+        rawText: recognized[i].fullText,
       ));
     }
 
@@ -260,6 +255,17 @@ class AppState extends ChangeNotifier {
   /// 把用户选的原图收进私有目录（顺便压缩），返回新路径
   Future<String> importImage(File source, int index) =>
       ocr.importImage(source, fileNameHint: 'p$index');
+
+  /// 识别一批图，把底层五花八门的异常统一成 [OcrException]
+  Future<List<OcrText>> _recognizeAll(List<String> paths) async {
+    try {
+      return await ocr.recognizeFiles(paths);
+    } on OcrException {
+      rethrow;
+    } catch (e) {
+      throw OcrException('识别过程出错：$e');
+    }
+  }
 
   // ------------------------------------------------------------ 写操作
 

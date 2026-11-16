@@ -1,5 +1,6 @@
 package com.xinji.payslip
 
+import android.os.Bundle
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -16,17 +17,28 @@ import io.flutter.plugin.common.MethodChannel
  */
 class MainActivity : FlutterFragmentActivity() {
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // 主进程启动时记一笔「上次是谁怎么死的」，设置页的诊断日志会读到它。
+        // native 崩溃抓不到 Dart 异常，只有系统这份记录能说清原因。
+        ExitReasons.capture(applicationContext)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        val messenger = flutterEngine.dartExecutor.binaryMessenger
 
         // 图片分块 / 压缩通道。长截图必须走这里：
         // Dart 侧整图解码一张 1080×12000 的图要 50MB，
         // 叠上编码缓冲就会被系统直接 kill（表现为闪退、日志空白）。
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            ImagingChannel.NAME
-        ).setMethodCallHandler { call, result ->
+        MethodChannel(messenger, ImagingChannel.NAME).setMethodCallHandler { call, result ->
             ImagingChannel.handle(call, result)
+        }
+
+        // 文字识别通道。真正的识别在 :ocr 独立进程里跑，
+        // 那边就算被 native 崩溃带走，主 App 也能活着弹「手动填」。
+        MethodChannel(messenger, OcrBridge.CHANNEL).setMethodCallHandler { call, result ->
+            OcrBridge.handle(call, result, applicationContext)
         }
     }
 }

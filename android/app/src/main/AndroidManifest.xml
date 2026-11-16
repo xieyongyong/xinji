@@ -23,7 +23,24 @@
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
-        android:fullBackupContent="false">
+        android:fullBackupContent="false"
+        android:largeHeap="true">
+
+        <!--
+            文字识别服务，跑在独立进程 :ocr。
+
+            为什么必须独立进程：ML Kit 中文识别是纯 native 实现，在部分设备上
+            会直接段错误或被系统 OOM 杀掉。放在主进程里就是「整个 App 闪退，
+            Dart 层来不及抛异常，日志空白」。隔离之后，这个进程死了主 App 还在，
+            OcrBridge 会收到连接断开回调，界面提示「可手动填」，图片也不会丢。
+
+            exported=false：只有本 App 能启动它，不对外暴露。
+        -->
+        <service
+            android:name=".OcrService"
+            android:process=":ocr"
+            android:exported="false"
+            android:stopWithTask="true" />
 
         <activity
             android:name=".MainActivity"

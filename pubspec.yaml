@@ -1,7 +1,7 @@
 name: xinji
 description: 薪迹 · 本地工资条记录、归档与对比
 publish_to: 'none'
-version: 1.4.0+4
+version: 1.5.0+5
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -20,8 +20,11 @@ dependencies:
   provider: ^6.1.2
   shared_preferences: ^2.3.2
 
-  # 离线 OCR（ML Kit 中文识别，模型随 APK 打包，不联网）
-  google_mlkit_text_recognition: ^0.13.0
+  # 离线 OCR（ML Kit 中文识别）
+  # 注意：这里【故意】不依赖 google_mlkit_text_recognition 插件。
+  #   插件会把 ML Kit 拽进主进程，一旦 native 崩了整个 App 就闪退。
+  #   现在识别由 android/app/.../OcrService.kt 在 :ocr 独立进程里调用，
+  #   ML Kit 的原生依赖写在 android/app/build.gradle.kts 的 dependencies 里。
 
   # 图片
   image_picker: ^1.1.2
