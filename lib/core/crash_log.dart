@@ -38,6 +38,12 @@ class CrashLog {
     };
   }
 
+  /// 记一条"面包屑"：不是异常，但出问题时要能看到走到哪一步了。
+  ///
+  /// 用法：识别大图这类容易被动崩溃的流程，在关键节点各记一条。
+  /// 如果 App 被系统 kill，日志里最后一条就是崩溃前的位置。
+  static void note(String text) => _write('[note] $text');
+
   static void _write(String text) {
     lastError = text;
     final f = _file;

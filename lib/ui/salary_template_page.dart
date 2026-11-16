@@ -1,23 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../data/employer.dart';
 import '../data/models.dart';
 import '../data/salary_template.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
 
-/// 发薪模板列表：可以建多套（这家公司一套、下家一套），同一时间只有一套生效。
+/// 发薪模板列表。
+///
+/// 归属关系是 **雇主 → 多套模板**：
+/// 同一家公司换过几种工资条格式（涨薪、换系统、改绩效结构）就存几套，
+/// 每家公司各自有一套「生效中」，互不干扰。
+/// 入口在「雇主档案」里，点某家公司进来就是这家的模板。
 class SalaryTemplatePage extends StatelessWidget {
-  const SalaryTemplatePage({super.key});
+  /// 看哪家公司的模板。为空表示"不属于任何雇主"的老模板。
+  final int? employerId;
+
+  const SalaryTemplatePage({super.key, this.employerId});
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final list = state.salaryTemplates;
+    final list = state.salaryTemplatesOf(employerId);
+    final employer = state.employerById(employerId);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('发薪模板'),
+        title: Text(employer == null ? '发薪模板' : '${employer.name} · 模板'),
         actions: [
           IconButton(
             tooltip: '新建模板',
@@ -35,12 +45,17 @@ class SalaryTemplatePage extends StatelessWidget {
               color: kInfoBg,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Text(
-              '生效中的模板会决定两件事：\n'
-              '· 手动录入时自动带出这些字段（金额留空由你填）\n'
-              '· 识别工资条时，没识别到的字段也会按模板补出来\n\n'
-              '换公司或工资条格式变了，就新建一套并设为生效。',
-              style: TextStyle(fontSize: 12, height: 1.7, color: Color(0xFF3D5A54)),
+            child: Text(
+              employer == null
+                  ? '生效中的模板会决定两件事：\n'
+                      '· 手动录入时自动带出这些字段（金额留空由你填）\n'
+                      '· 识别工资条时，没识别到的字段也会按模板补出来'
+                  : '这是「${employer.name}」的模板，只影响这家公司的录入预填。\n'
+                      '· 生效中的那套决定手动录入带出哪些字段\n'
+                      '· 识别工资条时，没识别到的字段也会按它补出来\n\n'
+                      '同一家公司换过工资条格式，就再建一套并设为生效；'
+                      '旧的那套留着，随时能切回来。',
+              style: const TextStyle(fontSize: 12, height: 1.7, color: Color(0xFF3D5A54)),
             ),
           ),
           const SizedBox(height: 14),
@@ -61,13 +76,14 @@ class SalaryTemplatePage extends StatelessWidget {
                 ],
               ),
             ),
-          for (final t in list) _templateCard(context, state, t),
+          for (final t in list) _templateCard(context, state, t, employer),
         ],
       ),
     );
   }
 
-  Widget _templateCard(BuildContext context, AppState state, SalaryTemplate t) {
+  Widget _templateCard(BuildContext context, AppState state, SalaryTemplate t,
+      Employer? employer) {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: cardDecoration(),
@@ -103,7 +119,7 @@ class SalaryTemplatePage extends StatelessWidget {
               icon: const Icon(Icons.more_horiz, size: 20),
               onSelected: (v) async {
                 if (v == 'active') {
-                  await state.activateSalaryTemplate(t.id!);
+                  await state.activateSalaryTemplate(t.id!, employerId: employerId);
                 } else if (v == 'delete') {
                   final ok = await showDialog<bool>(
                     context: context,
@@ -120,7 +136,9 @@ class SalaryTemplatePage extends StatelessWidget {
                       ],
                     ),
                   );
-                  if (ok == true) await state.deleteSalaryTemplate(t.id!);
+                  if (ok == true) {
+                    await state.deleteSalaryTemplate(t.id!, employerId: employerId);
+                  }
                 }
               },
               itemBuilder: (_) => [
@@ -137,7 +155,8 @@ class SalaryTemplatePage extends StatelessWidget {
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
-                  onPressed: () => state.activateSalaryTemplate(t.id!),
+                  onPressed: () =>
+                      state.activateSalaryTemplate(t.id!, employerId: employerId),
                   icon: const Icon(Icons.check_circle_outline, size: 16),
                   label: const Text('设为生效', style: TextStyle(fontSize: 12.5)),
                   style: TextButton.styleFrom(
@@ -159,8 +178,9 @@ class SalaryTemplatePage extends StatelessWidget {
       MaterialPageRoute(
         builder: (_) => SalaryTemplateEditPage(
           template: template,
-          // 新建时默认复制当前生效模板的字段，省得从零加一遍
-          copyFrom: template == null ? state.activeSalaryTemplate : null,
+          employerId: employerId,
+          // 新建时默认复制这家公司当前生效模板的字段，省得从零加一遍
+          copyFrom: template == null ? state.activeTemplateFor(employerId) : null,
         ),
       ),
     );
@@ -172,7 +192,15 @@ class SalaryTemplateEditPage extends StatefulWidget {
   final SalaryTemplate? template;
   final SalaryTemplate? copyFrom;
 
-  const SalaryTemplateEditPage({super.key, this.template, this.copyFrom});
+  /// 新建时归属到哪家雇主
+  final int? employerId;
+
+  const SalaryTemplateEditPage({
+    super.key,
+    this.template,
+    this.copyFrom,
+    this.employerId,
+  });
 
   @override
   State<SalaryTemplateEditPage> createState() => _SalaryTemplateEditPageState();
@@ -239,6 +267,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
     final state = context.read<AppState>();
     final template = SalaryTemplate(
       id: widget.template?.id,
+      employerId: widget.template?.employerId ?? widget.employerId,
       name: name,
       isActive: widget.template?.isActive ?? false,
       createdAt: widget.template?.createdAt ?? 0,

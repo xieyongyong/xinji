@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/employer.dart';
 import '../state/app_state.dart';
+import 'salary_template_page.dart';
 import 'theme.dart';
 
 /// 雇主档案：跳槽后新旧工资条并存，各算各的。
@@ -10,6 +11,8 @@ import 'theme.dart';
 /// 设计要点：
 /// - 同一时刻只有一个「当前雇主」，首页/年度/对比都只看它；
 ///   要看旧公司的数据，切过去就行，数据不会被删也不会被改。
+/// - 工资条模板挂在雇主下（一家公司可以有多套，各自一套生效），
+///   入口就在这里，不再单独放一个全局的「发薪模板」。
 /// - 删除雇主**不是**删数据：名下的记录必须先迁到另一家。
 ///   如果允许直接删，那些记录就变成看不见的孤儿 —— 用户会以为丢了。
 class EmployerPage extends StatelessWidget {
@@ -49,7 +52,8 @@ class EmployerPage extends StatelessWidget {
                 Expanded(
                   child: Text(
                     '换工作后新增一家雇主即可，旧记录不会被改动。'
-                    '首页只显示「当前雇主」的工资，看历史时切回去就看到了。',
+                    '首页只显示「当前雇主」的工资，看历史时切回去就看到了。\n'
+                    '工资条模板也按公司分开：点「模板」进去，同一家公司可以存多套格式。',
                     style: TextStyle(fontSize: 11.8, color: Color(0xFF3D5A54), height: 1.5),
                   ),
                 ),
@@ -72,6 +76,7 @@ class EmployerPage extends StatelessWidget {
   Widget _employerCard(BuildContext context, AppState state, Employer e) {
     final isCurrent = e.id == state.currentEmployerId;
     final count = state.records.where((r) => r.employerId == e.id).length;
+    final tplCount = state.salaryTemplatesOf(e.id).length;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -137,6 +142,7 @@ class EmployerPage extends StatelessWidget {
                       [
                         if (e.periodLabel.isNotEmpty) e.periodLabel,
                         '$count 条记录',
+                        '$tplCount 套模板',
                       ].join(' · '),
                       style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A)),
                     ),
@@ -157,12 +163,17 @@ class EmployerPage extends StatelessWidget {
                 onSelected: (v) async {
                   if (v == 'edit') {
                     await _edit(context, e);
+                  } else if (v == 'templates') {
+                    await Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => SalaryTemplatePage(employerId: e.id),
+                    ));
                   } else if (v == 'delete') {
                     await _delete(context, e);
                   }
                 },
                 itemBuilder: (_) => [
                   const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                  const PopupMenuItem(value: 'templates', child: Text('工资条模板')),
                   PopupMenuItem(
                     value: 'delete',
                     enabled: state.employers.length > 1,

@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_service.dart';
 import '../core/app_settings.dart';
+import '../core/crash_log.dart';
 import '../data/db.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
@@ -402,14 +403,15 @@ class _SettingsPageState extends State<SettingsPage> {
               _card([
                 _item(
                   icon: Icons.assignment_outlined,
-                  title: '发薪模板',
-                  subtitle: state.activeSalaryTemplate == null
-                      ? '未设置，录入时不会预填字段'
-                      : '当前生效：${state.activeSalaryTemplate!.name}'
-                          '（${state.activeSalaryTemplate!.fields.length} 个字段）',
+                  title: '工资条模板',
+                  subtitle: _templateSummary(state),
                   onTap: () async {
                     await Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const SalaryTemplatePage()),
+                      MaterialPageRoute(
+                        builder: (_) => SalaryTemplatePage(
+                          employerId: state.currentEmployer?.id,
+                        ),
+                      ),
                     );
                     setState(() {});
                   },
@@ -453,6 +455,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: '薪迹 · 本地存档',
                   subtitle: '共记录 ${state.records.length} 条'
                       '（${state.employers.length} 家雇主）',
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.bug_report_outlined,
+                  title: '诊断日志',
+                  subtitle: '出错时看这里：最后一步做到哪、卡在什么地方',
+                  onTap: _showDiagnostics,
                 ),
                 const Divider(height: 1),
                 const Padding(
@@ -569,6 +578,59 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
+  }
+
+  /// 诊断日志。
+  ///
+  /// 原生层的内存崩溃抓不到堆栈，但 CrashLog.note 会在关键节点留面包屑：
+  /// 最后一条是"分块识别 7 块"，说明崩在识别阶段；
+  /// 停在"正在处理第 2 张"，说明崩在图片压缩阶段。
+  /// 对排查"闪退"这种没有报错的问题，这几乎是唯一线索。
+  Future<void> _showDiagnostics() async {
+    final text = await CrashLog.read();
+    if (!mounted) return;
+    final lines = text.split('\n');
+    final tail = lines.length > 200
+        ? lines.sublist(lines.length - 200).join('\n')
+        : text;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('诊断日志'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 360,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              tail.trim().isEmpty ? '暂无记录。说明还没发生过异常。' : tail,
+              style: const TextStyle(fontSize: 10.5, height: 1.5),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await CrashLog.clear();
+              if (ctx.mounted) Navigator.pop(ctx);
+              setState(() {});
+            },
+            child: const Text('清空'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 「录入与显示」里的模板摘要：一句话说清当前公司在用什么
+  String _templateSummary(AppState state) {
+    final tpl = state.activeTemplateFor(state.currentEmployer?.id);
+    final count = state.salaryTemplatesOf(state.currentEmployer?.id).length;
+    if (tpl == null) return '未设置，录入时不会预填字段';
+    return '当前雇主 · $count 套，生效：${tpl.name}（${tpl.fields.length} 个字段）';
   }
 
   Widget _sectionTitle(String text) => Padding(

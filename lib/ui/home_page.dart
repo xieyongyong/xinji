@@ -16,7 +16,7 @@ import 'lock_page.dart';
 import 'review_page.dart';
 import 'settings_page.dart';
 import 'theme.dart';
-import 'yearly_page.dart';
+import 'stats_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -109,9 +109,9 @@ class _HomePageState extends State<HomePage> {
         ),
         actions: [
           IconButton(
-            tooltip: '年度总览',
+            tooltip: '统计（总计 / 年度 / 月度 / 项目 / 雇主）',
             icon: const Icon(Icons.insights_outlined),
-            onPressed: () => _open(YearlyPage(year: year)),
+            onPressed: () => _open(const StatsPage()),
           ),
           IconButton(
             tooltip: '设置',

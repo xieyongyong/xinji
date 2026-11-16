@@ -26,6 +26,10 @@ class ReviewPage extends StatefulWidget {
   final String initialRecordType;
   final String initialLabel;
 
+  /// 识别失败时的兜底：图片先存下来，表单留空让用户自己填。
+  /// 不这么做的话，用户要么丢掉已经截好的图，要么整个流程得重来。
+  final List<String> initialImagePaths;
+
   const ReviewPage._({
     this.editing,
     this.outcome,
@@ -33,6 +37,7 @@ class ReviewPage extends StatefulWidget {
     required this.initialMonth,
     required this.initialRecordType,
     this.initialLabel = '',
+    this.initialImagePaths = const [],
   });
 
   /// 空白新建
@@ -40,11 +45,13 @@ class ReviewPage extends StatefulWidget {
     required int year,
     required int month,
     String recordType = kTypeMonthly,
+    List<String> imagePaths = const [],
   }) =>
       ReviewPage._(
         initialYear: year,
         initialMonth: month,
         initialRecordType: recordType,
+        initialImagePaths: imagePaths,
       );
 
   /// 从 OCR 结果进入
@@ -154,9 +161,21 @@ class _ReviewPageState extends State<ReviewPage> {
       if (net != null) _netCtrl.text = _plain(net);
     }
 
-    // 3) 按「当前生效的发薪模板」补齐字段
+    // 2.5) 识别失败的兜底：图片照样挂上，表单空着让用户自己填。
+    //      这样至少截图不白截，也不用重新走一遍流程。
+    if (outcome == null && editing == null && widget.initialImagePaths.isNotEmpty) {
+      for (var i = 0; i < widget.initialImagePaths.length; i++) {
+        _images.add(PayImage(
+          filePath: widget.initialImagePaths[i],
+          sortOrder: i,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+        ));
+      }
+    }
+
+    // 3) 按「这家雇主的发薪模板」补齐字段
     //    新建：整份预填；OCR：只补识别没覆盖到的，已识别的值优先
-    final tpl = context.read<AppState>().activeSalaryTemplate;
+    final tpl = appState.activeTemplateFor(_employerId);
     if (editing == null && tpl != null) {
       _prefillFromTemplate(tpl, onlyMissing: widget.outcome != null);
     }
@@ -600,6 +619,8 @@ class _ReviewPageState extends State<ReviewPage> {
                       File(path),
                       width: 56,
                       height: 74,
+                      // 只按缩略图需要解码，别为 56px 的小图解码一整张长截图
+                      cacheWidth: 220,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => Container(
                         width: 56,

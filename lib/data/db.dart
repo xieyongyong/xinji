@@ -18,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 4,
+      version: 5,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -93,8 +93,9 @@ class AppDb {
     await _createV2Tables(db);
     await _createV4Tables(db);
     await _seedTemplates(db);
-    await _seedDefaultSalaryTemplate(db);
+    // 顺序有讲究：先建雇主，模板才知道挂给谁
     await _seedDefaultEmployer(db);
+    await _seedDefaultSalaryTemplate(db);
   }
 
   /// v2 新增的三张表。
@@ -120,6 +121,7 @@ class AppDb {
     await db.execute('''
       CREATE TABLE IF NOT EXISTS salary_template (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        employer_id INTEGER,
         name TEXT NOT NULL,
         is_active INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
@@ -157,6 +159,86 @@ class AppDb {
       // v4：多雇主档案（跳槽后新旧工资条并存、互不干扰）
       await _migrateV4(db);
     }
+    if (oldVersion < 5) {
+      // v5：发薪模板挂到雇主下（一家公司可以有多套模板，各自一套生效）
+      await _migrateV5(db);
+    }
+  }
+
+  /// v5 迁移：模板归属到具体雇主。
+  ///
+  /// 老库里的模板是"全局一套"，跳槽后切生效会把别家一起改掉。
+  /// 迁移做两件事：
+  /// 1) 现有模板全部挂到第一家雇主（一条都不能丢，否则录入页突然不预填）
+  /// 2) 其它有记录但没有模板的雇主，复制一份过去的模板
+  ///    —— 否则那家公司的录入页永远是空表单
+  static Future<void> _migrateV5(Database db) async {
+    if (!await _hasColumn(db, 'salary_template', 'employer_id')) {
+      await db.execute('ALTER TABLE salary_template ADD COLUMN employer_id INTEGER');
+    }
+
+    final first = await db.query('employer', columns: ['id'], orderBy: 'id ASC', limit: 1);
+    if (first.isEmpty) return;
+    final firstId = first.first['id'] as int;
+
+    await db.update('salary_template', {'employer_id': firstId},
+        where: 'employer_id IS NULL');
+
+    final employers = await db.query('employer', columns: ['id']);
+    for (final e in employers) {
+      final id = e['id'] as int;
+      if (id == firstId) continue;
+
+      final recCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM pay_record WHERE employer_id = ?', [id])) ??
+          0;
+      if (recCount == 0) continue;
+
+      final tplCount = Sqflite.firstIntValue(await db.rawQuery(
+            'SELECT COUNT(*) FROM salary_template WHERE employer_id = ?', [id])) ??
+          0;
+      if (tplCount > 0) continue;
+
+      await _copyTemplateTo(db, firstId, id);
+    }
+  }
+
+  /// 把 [fromEmployerId] 当前生效的模板复制一份给 [toEmployerId]
+  static Future<void> _copyTemplateTo(
+      Database db, int fromEmployerId, int toEmployerId) async {
+    var src = await db.query('salary_template',
+        where: 'employer_id = ? AND is_active = 1',
+        whereArgs: [fromEmployerId],
+        limit: 1);
+    if (src.isEmpty) {
+      src = await db.query('salary_template',
+          where: 'employer_id = ?', whereArgs: [fromEmployerId], limit: 1);
+    }
+    if (src.isEmpty) return;
+
+    final srcId = src.first['id'] as int;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final newId = await db.insert('salary_template', {
+      'employer_id': toEmployerId,
+      'name': (src.first['name'] as String?) ?? '默认发薪模板',
+      'is_active': 1,
+      'created_at': now,
+      'updated_at': now,
+    });
+
+    final fields = await db.query('template_field',
+        where: 'template_id = ?', whereArgs: [srcId], orderBy: 'sort_order ASC, id ASC');
+    final batch = db.batch();
+    for (final f in fields) {
+      batch.insert('template_field', {
+        'template_id': newId,
+        'name': f['name'],
+        'category': f['category'],
+        'value_type': f['value_type'],
+        'sort_order': f['sort_order'],
+      });
+    }
+    await batch.commit(noResult: true);
   }
 
   /// v4 新增：雇主表。新库、老库共用同一段 SQL。
@@ -321,7 +403,17 @@ class AppDb {
     if (existing.isNotEmpty) return;
 
     final now = DateTime.now().millisecondsSinceEpoch;
+    // 从 v1 直升上来时，雇主表可能还没建（建表在 _migrateV4 里），
+    // 这里查不到就留空，后面 `_migrateV5` 会把它补到第一家雇主名下
+    int? employerId;
+    try {
+      final employer = await db.query('employer', columns: ['id'], limit: 1);
+      employerId = employer.isEmpty ? null : employer.first['id'] as int;
+    } catch (_) {
+      employerId = null;
+    }
     final templateId = await db.insert('salary_template', {
+      'employer_id': employerId,
       'name': '默认发薪模板',
       'is_active': 1,
       'created_at': now,

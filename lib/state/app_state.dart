@@ -46,9 +46,8 @@ class AppState extends ChangeNotifier {
 
   static const String _kCurrentEmployer = 'current_employer_id';
 
-  /// 发薪模板（可多套，仅一套生效）
+  /// 发薪模板。归属关系：雇主 → 多套模板，各自一套生效。
   List<SalaryTemplate> salaryTemplates = [];
-  SalaryTemplate? activeSalaryTemplate;
 
   bool loading = true;
 
@@ -94,7 +93,6 @@ class AppState extends ChangeNotifier {
     records = await recordDao.loadAll();
     templates = await templateDao.loadAll();
     salaryTemplates = await salaryTemplateDao.loadAll();
-    activeSalaryTemplate = await salaryTemplateDao.activeTemplate();
     employers = await employerDao.loadAll();
     // 当前雇主被删了要兜住，否则所有筛选视图都会变成空白
     if (employers.isNotEmpty && !employers.any((e) => e.id == currentEmployerId)) {
@@ -147,7 +145,24 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> addEmployer(Employer e) async {
-    await employerDao.insert(e);
+    // 新雇主一开始没有任何模板 → 录入页会是空表单。
+    // 把当前生效模板复制一份过去，用户再按新公司的工资条改，
+    // 比从零加十几个字段省事得多。
+    final source = activeSalaryTemplate;
+    final id = await employerDao.insert(e);
+    if (source != null && source.fields.isNotEmpty) {
+      await salaryTemplateDao.insert(SalaryTemplate(
+        employerId: id,
+        name: source.name,
+        fields: source.fields
+            .map((f) => TemplateField(
+                  name: f.name,
+                  category: f.category,
+                  valueType: f.valueType,
+                ))
+            .toList(),
+      ));
+    }
     await reload();
   }
 
@@ -161,6 +176,9 @@ class AppState extends ChangeNotifier {
     if (id == moveTo) throw ArgumentError('不能迁移到自己');
     final wasCurrent = currentEmployerId == id;
     await employerDao.moveRecords(id, moveTo);
+    // 模板跟着一起迁：留在已删除的雇主名下就成了永远的孤儿，
+    // 既看不到也用不上
+    await salaryTemplateDao.moveToEmployer(id, moveTo);
     await employerDao.delete(id);
     await reload();
     // reload 会把"已失效的当前雇主"重置成第一家，所以这里按删除前的状态补一刀
@@ -200,7 +218,15 @@ class AppState extends ChangeNotifier {
   // ------------------------------------------------------------ OCR
 
   /// 多图 -> 识别 -> 合并。整个过程离线完成。
-  Future<RecognizeOutcome> recognizeImages(List<String> filePaths) async {
+  ///
+  /// [filePaths] 是**拿来做识别**的图（建议用相册原图，字最清楚）；
+  /// [keepPaths] 是**要留在记录里**的图（归档压缩后的）。
+  /// 两者分开是因为：归档为了省空间可能降过采样，识别精度不该被它拖累，
+  /// 而记录里必须存私有目录的副本 —— 相册/缓存里的原图随时会被系统清掉。
+  Future<RecognizeOutcome> recognizeImages(
+    List<String> filePaths, {
+    List<String>? keepPaths,
+  }) async {
     final parser = FieldParser(templates);
     final parsed = <ParsedImage>[];
 
@@ -215,9 +241,12 @@ class AppState extends ChangeNotifier {
       } catch (e) {
         throw OcrException('第 ${i + 1} 张图识别失败：$e');
       }
+      final keep = (keepPaths != null && i < keepPaths.length && keepPaths[i].isNotEmpty)
+          ? keepPaths[i]
+          : path;
       parsed.add(parser.parseImage(
         index: i,
-        filePath: path,
+        filePath: keep,
         lines: recognized.lines,
         rawText: recognized.fullText,
       ));
@@ -285,6 +314,31 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------ 发薪模板
 
+  /// 某家雇主名下的模板。
+  ///
+  /// 有精确归属就用精确的；没有则退回「还没归属过」的老模板（employer_id 为空），
+  /// 这样升级上来的用户不会突然看不到模板。
+  List<SalaryTemplate> salaryTemplatesOf(int? employerId) {
+    final exact =
+        salaryTemplates.where((t) => t.employerId == employerId).toList();
+    if (exact.isNotEmpty) return exact;
+    return salaryTemplates.where((t) => t.employerId == null).toList();
+  }
+
+  /// 某家雇主当前生效的模板（没有明确标记就退到最近改过的那套）
+  SalaryTemplate? activeTemplateFor(int? employerId) {
+    final list = salaryTemplatesOf(employerId);
+    if (list.isEmpty) return null;
+    for (final t in list) {
+      if (t.isActive) return t;
+    }
+    return list.first;
+  }
+
+  /// 当前雇主生效的模板（兼容旧调用点）
+  SalaryTemplate? get activeSalaryTemplate =>
+      activeTemplateFor(currentEmployer?.id);
+
   Future<void> saveSalaryTemplate(SalaryTemplate t) async {
     if (t.id == null) {
       await salaryTemplateDao.insert(t);
@@ -294,13 +348,13 @@ class AppState extends ChangeNotifier {
     await reload();
   }
 
-  Future<void> deleteSalaryTemplate(int id) async {
-    await salaryTemplateDao.delete(id);
+  Future<void> deleteSalaryTemplate(int id, {int? employerId}) async {
+    await salaryTemplateDao.delete(id, employerId: employerId);
     await reload();
   }
 
-  Future<void> activateSalaryTemplate(int id) async {
-    await salaryTemplateDao.setActive(id);
+  Future<void> activateSalaryTemplate(int id, {int? employerId}) async {
+    await salaryTemplateDao.setActive(id, employerId: employerId);
     await reload();
   }
 

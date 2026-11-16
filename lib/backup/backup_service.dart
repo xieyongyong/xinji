@@ -266,13 +266,25 @@ class BackupService {
         await txn.delete('salary_template');
         for (final st in salaryTemplates) {
           await txn.insert('salary_template', _sanitize(st, const {
-            'id', 'name', 'is_active', 'created_at', 'updated_at',
+            'id', 'employer_id', 'name', 'is_active', 'created_at', 'updated_at',
           }));
         }
         for (final tf in templateFields) {
           await txn.insert('template_field', _sanitize(tf, const {
             'id', 'template_id', 'name', 'category', 'value_type', 'sort_order',
           }));
+        }
+
+        // 老备份里的模板没有归属：挂到第一家雇主，
+        // 否则按雇主取模板会全部落空，录入页突然不预填
+        final firstEmp = await txn.query('employer',
+            columns: ['id'], orderBy: 'id ASC', limit: 1);
+        if (firstEmp.isNotEmpty) {
+          await txn.update(
+            'salary_template',
+            {'employer_id': firstEmp.first['id']},
+            where: 'employer_id IS NULL',
+          );
         }
       }
     });
@@ -323,7 +335,7 @@ class BackupService {
 
     return {
       'app': 'xinji',
-      'version': 3,
+      'version': 4,
       'exported_at': DateTime.now().toIso8601String(),
       'records': records.map((e) => Map<String, dynamic>.from(e)).toList(),
       'items': items.map((e) => Map<String, dynamic>.from(e)).toList(),

@@ -419,6 +419,9 @@ class DetailPage extends StatelessWidget {
                     File(paths[i]),
                     width: 60,
                     height: 80,
+                    // 长截图原图可能上千万像素，缩略图必须限制解码尺寸，
+                    // 否则一屏几个缩略图就把内存吃满了
+                    cacheWidth: 240,
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) => Container(
                       width: 60,

@@ -3,10 +3,18 @@ import 'models.dart';
 /// 一套「发薪模板」= 这家公司的工资条长什么样。
 ///
 /// 为什么需要它：换公司、换岗、公司改工资条格式时，字段清单会变。
-/// 用户可以给每家公司/每种格式建一套模板，**同一时间只有一套生效**，
-/// 录入和 OCR 预填都按生效的那套走，不用每次手动加十几个项目。
+///
+/// 归属关系是 **雇主 → 多套模板**：
+/// - 同一家公司可能先后用过几种工资条格式（涨薪、换系统、改绩效结构），
+///   每种存一套，随时切回来对比；
+/// - 每家公司各自有一套「生效中」，互不干扰 —— 以前是全局只能有一套，
+///   跳槽后想把新公司设成生效，旧公司的录入预填就被一起改掉了。
 class SalaryTemplate {
   final int? id;
+
+  /// 属于哪家雇主。为空表示历史遗留的"全局模板"，加载时会兜到第一家。
+  final int? employerId;
+
   final String name;
   final bool isActive;
   final int createdAt;
@@ -17,6 +25,7 @@ class SalaryTemplate {
 
   SalaryTemplate({
     this.id,
+    this.employerId,
     required this.name,
     this.isActive = false,
     this.createdAt = 0,
@@ -33,6 +42,7 @@ class SalaryTemplate {
 
   Map<String, Object?> toMap() => {
         if (id != null) 'id': id,
+        'employer_id': employerId,
         'name': name,
         'is_active': isActive ? 1 : 0,
         'created_at': createdAt,
@@ -41,15 +51,23 @@ class SalaryTemplate {
 
   factory SalaryTemplate.fromMap(Map<String, Object?> m) => SalaryTemplate(
         id: m['id'] as int?,
+        employerId: m['employer_id'] as int?,
         name: (m['name'] as String?) ?? '',
         isActive: ((m['is_active'] as int?) ?? 0) == 1,
         createdAt: (m['created_at'] as int?) ?? 0,
         updatedAt: (m['updated_at'] as int?) ?? 0,
       );
 
-  SalaryTemplate copyWith({int? id, String? name, bool? isActive, List<TemplateField>? fields}) =>
+  SalaryTemplate copyWith({
+    int? id,
+    int? employerId,
+    String? name,
+    bool? isActive,
+    List<TemplateField>? fields,
+  }) =>
       SalaryTemplate(
         id: id ?? this.id,
+        employerId: employerId ?? this.employerId,
         name: name ?? this.name,
         isActive: isActive ?? this.isActive,
         createdAt: createdAt,

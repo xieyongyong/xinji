@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../core/crash_log.dart';
 import '../data/models.dart';
+import '../ocr/ocr_service.dart';
 import '../state/app_state.dart';
 import 'review_page.dart';
 import 'theme.dart';
@@ -27,7 +29,10 @@ class _ImportPageState extends State<ImportPage> {
 
   Future<void> _pickFromGallery() async {
     try {
-      final files = await _picker.pickMultiImage(imageQuality: 100);
+      // 不传 imageQuality！传了的话 image_picker 会在原生侧把整张图
+      // 解码 → 压缩 → 再编码，1080×12000 的长截图在这一步就被系统 kill 了，
+      // 跟 OCR 一点关系都没有，所以之前怎么优化识别都还是闪退。
+      final files = await _picker.pickMultiImage();
       if (files.isEmpty) return;
       await _process(files.map((e) => File(e.path)).toList());
     } catch (e) {
@@ -37,7 +42,7 @@ class _ImportPageState extends State<ImportPage> {
 
   Future<void> _takePhoto() async {
     try {
-      final file = await _picker.pickImage(source: ImageSource.camera, imageQuality: 100);
+      final file = await _picker.pickImage(source: ImageSource.camera);
       if (file == null) return;
       await _process([File(file.path)]);
     } catch (e) {
@@ -52,6 +57,9 @@ class _ImportPageState extends State<ImportPage> {
   }
 
   /// 收图 -> 压缩入库 -> 逐张 OCR -> 合并 -> 进校对页
+  ///
+  /// 容错原则：**识别失败不等于流程失败**。图片已经存进私有目录了，
+  /// 就算 OCR 挂了也要让用户接着手动填，不能让他重新截图。
   Future<void> _process(List<File> files) async {
     if (_busy) return;
     setState(() {
@@ -59,36 +67,84 @@ class _ImportPageState extends State<ImportPage> {
       _busyText = '正在保存图片…';
     });
 
-    try {
-      final state = context.read<AppState>();
-      final paths = <String>[];
+    final state = context.read<AppState>();
+    final originals = <String>[];
+    final paths = <String>[];
 
+    try {
       for (var i = 0; i < files.length; i++) {
         if (!mounted) return;
         setState(() => _busyText = '正在处理第 ${i + 1}/${files.length} 张…');
+        originals.add(files[i].path);
         paths.add(await state.importImage(files[i], i));
       }
+    } catch (e) {
+      _error('保存图片失败：$e');
+      return;
+    }
 
-      if (!mounted) return;
-      setState(() => _busyText = files.length > 1 ? '正在合并 ${files.length} 张截图…' : '正在识别文字…');
+    if (!mounted) return;
+    setState(() => _busyText = files.length > 1 ? '正在合并 ${files.length} 张截图…' : '正在识别文字…');
 
-      final outcome = await state.recognizeImages(paths);
-      if (!mounted) return;
+    RecognizeOutcome? outcome;
+    String? failReason;
+    try {
+      // 识别读原图（字最清楚），记录里存归档副本（私有的、不会被系统清掉）
+      outcome = await state.recognizeImages(originals, keepPaths: paths);
+    } catch (e) {
+      failReason = e is OcrException ? e.message : '$e';
+      CrashLog.note('识别失败：$failReason');
+    }
 
-      setState(() => _busy = false);
+    if (!mounted) return;
+    setState(() => _busy = false);
 
+    if (outcome == null) {
+      final manual = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('自动识别没成功'),
+          content: Text(
+            '${failReason ?? '识别过程出错了'}\n\n'
+            '图片已经保存好了，可以直接手动填这一张（字段会按模板预填），不用重新截图。',
+            style: const TextStyle(fontSize: 13.5, height: 1.6),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('重来'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('手动填'),
+            ),
+          ],
+        ),
+      );
+      if (manual != true || !mounted) return;
       final saved = await Navigator.of(context).push<bool>(
         MaterialPageRoute(
-          builder: (_) => ReviewPage.fromOutcome(
-            outcome: outcome,
+          builder: (_) => ReviewPage.create(
+            year: DateTime.now().year,
+            month: DateTime.now().month,
             recordType: _recordType,
+            imagePaths: paths,
           ),
         ),
       );
       if (saved == true && mounted) Navigator.of(context).pop(true);
-    } catch (e) {
-      _error('识别出错：$e');
+      return;
     }
+
+    final saved = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ReviewPage.fromOutcome(
+          outcome: outcome!,
+          recordType: _recordType,
+        ),
+      ),
+    );
+    if (saved == true && mounted) Navigator.of(context).pop(true);
   }
 
   @override
