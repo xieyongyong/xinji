@@ -229,7 +229,7 @@ class OcrService : Service() {
             }
             canvas.drawText("薪迹 1234", 14f, 72f, paint)
 
-            val hits = if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ppEngine().recognize(bmp)
+            val hits = if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ensurePpEngine().recognize(bmp)
             val text = hits.joinToString("") { it.text }.trim()
             trace("自检 通过「${text.take(24)}」(${hits.size} 段)")
             selfTested = true
@@ -263,7 +263,7 @@ class OcrService : Service() {
         return out
     }
 
-    private fun ppEngine(): PpOcrEngine {
+    private fun ensurePpEngine(): PpOcrEngine {
         ppEngine?.let { return it }
         val created = PpOcrEngine(this) { line -> trace(line) }
         created.ensureLoaded()
@@ -321,7 +321,7 @@ class OcrService : Service() {
                     ?: throw IllegalStateException("第 ${ti + 1} 块图片解码失败")
                 val started = System.currentTimeMillis()
                 val hits: List<PpOcrEngine.Hit> = try {
-                    if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ppEngine().recognize(bmp)
+                    if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ensurePpEngine().recognize(bmp)
                 } finally {
                     // 一块 1600x1400 的位图就是 9MB，用完立刻放
                     bmp.recycle()
