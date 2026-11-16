@@ -55,8 +55,14 @@ object TileCleaner {
     /** 空档至少这么宽（亮度级数）才认为是"真的分开了"，否则走保守兜底 */
     private const val MIN_GAP = 10
 
-    /** 一次刷白超过这个比例，说明阈值算歪了，宁可不清 */
-    private const val MAX_WHITEN_RATIO = 0.55
+    /**
+     * 刷白之后至少要剩下这么多比例的深色像素，否则说明阈值选歪了。
+     *
+     * 不用「刷白比例超多少就放弃」来兜底：白底偏灰的截图（纸面 240）
+     * 整片背景都会被刷白，比例天然就高，但那是正确行为。
+     * 真正该警惕的是「把正文一起刷没了」—— 用剩下的深色像素来判断。
+     */
+    private const val MIN_KEEP_RATIO = 0.002
 
     class Result(val bitmap: Bitmap, val summary: String)
 
@@ -127,6 +133,7 @@ object TileCleaner {
 
         // 5) 刷白：只动 >= t 的像素，正文原样
         var whitened = 0
+        var kept = 0
         for (i in 0 until n) {
             val c = px[i]
             if (luma(c) >= t) {
@@ -138,14 +145,17 @@ object TileCleaner {
                     px[i] = 0xFFFFFFFF.toInt()
                     whitened++
                 }
+            } else {
+                kept++
             }
         }
 
         if (whitened == 0) {
             return Result(src, "无浅灰像素 paper=$paper ink=$ink T=$t")
         }
-        if (whitened > n * MAX_WHITEN_RATIO) {
-            return Result(src, "跳过：会刷掉 ${whitened * 100 / n}% 像素 paper=$paper T=$t")
+        // 刷完几乎没剩多少深色像素 → 阈值算歪了（把正文也刷了），宁可不清
+        if (kept < n * MIN_KEEP_RATIO) {
+            return Result(src, "跳过：刷完只剩 ${kept * 1000 / n / 10.0}% 深色像素 T=$t")
         }
 
         // 直接用像素数组造一张新图：比 copy() 少一次整图拷贝，峰值内存更低
