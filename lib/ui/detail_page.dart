@@ -119,6 +119,10 @@ class DetailPage extends StatelessWidget {
               negative: true,
             ),
           if (deductions.isNotEmpty) const SizedBox(height: 14),
+          if (record.infos.isNotEmpty) ...[
+            _infosCard(record),
+            const SizedBox(height: 14),
+          ],
           if (record.images.isNotEmpty) _imagesCard(context, record),
           if (note is String && note.trim().isNotEmpty) ...[
             const SizedBox(height: 14),
@@ -297,6 +301,58 @@ class DetailPage extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// 信息项：姓名、工号、业务单位、应出勤天数…不参与合计
+  Widget _infosCard(PayRecord r) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 13, 14, 8),
+      decoration: cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 3,
+                height: 13,
+                decoration: BoxDecoration(
+                    color: const Color(0xFF9AA09A), borderRadius: BorderRadius.circular(2)),
+              ),
+              const SizedBox(width: 8),
+              const Text('信息项',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              const Text('不计入合计',
+                  style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+            ],
+          ),
+          const SizedBox(height: 6),
+          for (final info in r.infos)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 4,
+                    child: Text(info.name,
+                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+                  ),
+                  Expanded(
+                    flex: 5,
+                    child: Text(
+                      info.value.isEmpty ? '—' : info.value,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(fontSize: 13, color: Color(0xFF1B1C1B)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
         ],
       ),
     );

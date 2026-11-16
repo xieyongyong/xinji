@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_settings.dart';
 import '../core/money.dart';
 import '../state/app_state.dart';
 import '../stats/salary_stats.dart';
@@ -25,12 +26,17 @@ class _ComparePageState extends State<ComparePage> {
   int? _monthA;
   int? _monthB;
 
+  /// 哪些卡片展开了"无变化项目"
+  final Set<String> _expandedGroups = {};
+
   @override
   void initState() {
     super.initState();
     _year = widget.year;
     _monthB = widget.focusMonth;
   }
+
+  AppSettings get _settings => context.watch<AppSettings>();
 
   @override
   Widget build(BuildContext context) {
@@ -113,7 +119,7 @@ class _ComparePageState extends State<ComparePage> {
             ),
           const SizedBox(height: 12),
           const Text(
-            '说明：红色表示这项金额变多了，绿色表示变少了。'
+            '说明：金额变多与变少用不同颜色区分（红涨绿跌，可在设置里改配色）。'
             '扣款项变多意味着从工资里扣得更多。',
             style: TextStyle(fontSize: 11, color: Color(0xFFB0B5B0), height: 1.5),
           ),
@@ -172,9 +178,7 @@ class _ComparePageState extends State<ComparePage> {
 
   Widget _headlineCard(MonthComparison c) {
     final up = c.netDiff > 0;
-    final color = c.netDiff == 0
-        ? const Color(0xFF6B6F6B)
-        : (up ? kUp : kDown);
+    final color = _settings.diffColor(c.netDiff);
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -205,9 +209,7 @@ class _ComparePageState extends State<ComparePage> {
 
   Widget _totalsCompare(MonthComparison c) {
     Widget row(String label, int a, int b, int diff) {
-      final color = diff == 0
-          ? const Color(0xFF8A8F8A)
-          : (diff > 0 ? kUp : kDown);
+      final color = _settings.diffColor(diff);
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 7),
         child: Row(
@@ -254,9 +256,10 @@ class _ComparePageState extends State<ComparePage> {
     required List<ItemDiff> diffs,
     required String emptyHint,
   }) {
-    // 只显示有变化的项，没变化的折叠成一行说明
+    // 有变化的默认展开；无变化的默认收起，点一下才看得到具体哪几项没动
     final changed = diffs.where((d) => d.diff != 0 || d.isNew || d.isGone).toList();
-    final unchanged = diffs.length - changed.length;
+    final unchanged = diffs.where((d) => !(d.diff != 0 || d.isNew || d.isGone)).toList();
+    final expanded = _expandedGroups.contains(title);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
@@ -288,21 +291,46 @@ class _ComparePageState extends State<ComparePage> {
                   style: const TextStyle(fontSize: 12.5, color: Color(0xFFB0B5B0))),
             ),
           for (final d in changed) _diffRow(d),
-          if (unchanged > 0)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text('另有 $unchanged 项没有变化',
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFFB0B5B0))),
+          if (unchanged.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            InkWell(
+              onTap: () => setState(() {
+                if (expanded) {
+                  _expandedGroups.remove(title);
+                } else {
+                  _expandedGroups.add(title);
+                }
+              }),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: Row(
+                  children: [
+                    Text(
+                      expanded
+                          ? '收起无变化项目'
+                          : '查看 ${unchanged.length} 项无变化项目',
+                      style: const TextStyle(fontSize: 11.8, color: kSeed),
+                    ),
+                    Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                        size: 15, color: kSeed),
+                  ],
+                ),
+              ),
             ),
+            if (expanded)
+              for (final d in unchanged)
+                Padding(
+                  padding: const EdgeInsets.only(left: 2),
+                  child: _diffRow(d),
+                ),
+          ],
         ],
       ),
     );
   }
 
   Widget _diffRow(ItemDiff d) {
-    final color = d.diff == 0
-        ? const Color(0xFF8A8F8A)
-        : (d.diff > 0 ? kUp : kDown);
+    final color = _settings.diffColor(d.diff);
 
     String amountText;
     if (d.isNew) {

@@ -7,11 +7,13 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_service.dart';
+import '../core/app_settings.dart';
 import '../data/db.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
 import '../state/app_state.dart';
 import 'lock_page.dart';
+import 'salary_template_page.dart';
 import 'theme.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -269,6 +271,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) {
     final lock = context.watch<LockService>();
     final state = context.watch<AppState>();
+    final settings = context.watch<AppSettings>();
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -377,6 +380,50 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
+              _sectionTitle('录入与显示'),
+              _card([
+                _item(
+                  icon: Icons.assignment_outlined,
+                  title: '发薪模板',
+                  subtitle: state.activeSalaryTemplate == null
+                      ? '未设置，录入时不会预填字段'
+                      : '当前生效：${state.activeSalaryTemplate!.name}'
+                          '（${state.activeSalaryTemplate!.fields.length} 个字段）',
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => const SalaryTemplatePage()),
+                    );
+                    setState(() {});
+                  },
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.perfAuto,
+                  onChanged: (v) => settings.setPerfAuto(v),
+                  title: const Text('绩效工资自动计算', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text(
+                    '开启后：绩效工资 = 基本绩效 × 绩效系数（三项都在才算）',
+                    style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A)),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  secondary: const Icon(Icons.functions, size: 20, color: Color(0xFF4A4F4A)),
+                ),
+                const Divider(height: 1),
+                _colorItem(
+                  icon: Icons.trending_up,
+                  title: '上涨颜色',
+                  current: settings.upColor,
+                  onPick: (argb) => settings.setUpColor(argb),
+                ),
+                const Divider(height: 1),
+                _colorItem(
+                  icon: Icons.trending_down,
+                  title: '下跌颜色',
+                  current: settings.downColor,
+                  onPick: (argb) => settings.setDownColor(argb),
+                ),
+              ]),
+              const SizedBox(height: 18),
               _sectionTitle('关于'),
               _card([
                 _item(
@@ -420,6 +467,82 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// 颜色设置行：右侧显示当前色块，点开选色
+  Widget _colorItem({
+    required IconData icon,
+    required String title,
+    required Color current,
+    required ValueChanged<int> onPick,
+  }) {
+    return _item(
+      icon: icon,
+      title: title,
+      subtitle: '默认红涨绿跌，可换成你习惯的配色',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 18,
+            height: 18,
+            decoration: BoxDecoration(color: current, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC4C9C4)),
+        ],
+      ),
+      onTap: () async {
+        final picked = await _pickColor(current);
+        if (picked != null) onPick(picked);
+      },
+    );
+  }
+
+  Future<int?> _pickColor(Color current) async {
+    const presets = <int>[
+      0xFFC62828, // 红
+      0xFFE65100, // 橙
+      0xFFF9A825, // 黄
+      0xFF2E7D32, // 绿
+      0xFF00796B, // 青
+      0xFF1565C0, // 蓝
+      0xFF6A1B9A, // 紫
+      0xFF424242, // 灰
+    ];
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('选择颜色'),
+        content: Wrap(
+          spacing: 14,
+          runSpacing: 14,
+          children: [
+            for (final argb in presets)
+              GestureDetector(
+                onTap: () => Navigator.pop(ctx, argb),
+                child: Container(
+                  width: 42,
+                  height: 42,
+                  decoration: BoxDecoration(
+                    color: Color(argb),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: current == Color(argb)
+                          ? const Color(0xFF1B1C1B)
+                          : Colors.transparent,
+                      width: 2.5,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
         ],
       ),
     );

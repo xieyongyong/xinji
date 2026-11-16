@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../data/db.dart';
 import '../data/models.dart';
 import '../data/record_dao.dart';
+import '../data/salary_template.dart';
+import '../data/salary_template_dao.dart';
 import '../data/template_dao.dart';
 import '../ocr/field_parser.dart';
 import '../ocr/merge_engine.dart';
@@ -26,10 +28,16 @@ class RecognizeOutcome {
 class AppState extends ChangeNotifier {
   late RecordDao recordDao;
   late TemplateDao templateDao;
+  late SalaryTemplateDao salaryTemplateDao;
   final OcrService ocr = OcrService();
 
   List<PayRecord> records = [];
   List<ItemTemplate> templates = [];
+
+  /// 发薪模板（可多套，仅一套生效）
+  List<SalaryTemplate> salaryTemplates = [];
+  SalaryTemplate? activeSalaryTemplate;
+
   bool loading = true;
 
   /// 上次备份时间（毫秒），用于首页提醒
@@ -39,6 +47,7 @@ class AppState extends ChangeNotifier {
     final db = await AppDb.instance;
     recordDao = RecordDao(db);
     templateDao = TemplateDao(db);
+    salaryTemplateDao = SalaryTemplateDao(db);
     await reload();
     loading = false;
     notifyListeners();
@@ -47,6 +56,8 @@ class AppState extends ChangeNotifier {
   Future<void> reload() async {
     records = await recordDao.loadAll();
     templates = await templateDao.loadAll();
+    salaryTemplates = await salaryTemplateDao.loadAll();
+    activeSalaryTemplate = await salaryTemplateDao.activeTemplate();
     notifyListeners();
   }
 
@@ -87,7 +98,15 @@ class AppState extends ChangeNotifier {
 
     for (var i = 0; i < filePaths.length; i++) {
       final path = filePaths[i];
-      final recognized = await ocr.recognizeFile(path);
+      final RecognizedText recognized;
+      try {
+        recognized = await ocr.recognizeFile(path);
+      } on OcrException catch (e) {
+        // 带上"第几张"，用户才知道该重新截哪一张
+        throw OcrException('第 ${i + 1} 张图识别失败：${e.message}');
+      } catch (e) {
+        throw OcrException('第 ${i + 1} 张图识别失败：$e');
+      }
       parsed.add(parser.parseImage(
         index: i,
         filePath: path,
@@ -110,13 +129,14 @@ class AppState extends ChangeNotifier {
   Future<int> insertRecord(
     PayRecord record,
     List<PayItemDraft> drafts,
-    List<PayImage> images,
-  ) async {
+    List<PayImage> images, [
+    List<PayInfo> infos = const [],
+  ]) async {
     final items = <PayItem>[
       for (var i = 0; i < drafts.length; i++)
         drafts[i].toPayItem(sortOrder: i),
     ];
-    final id = await recordDao.insert(record, items, images);
+    final id = await recordDao.insert(record, items, images, infos);
     await reload();
     return id;
   }
@@ -124,12 +144,13 @@ class AppState extends ChangeNotifier {
   Future<void> updateRecord(
     PayRecord record,
     List<PayItemDraft> drafts,
-    List<PayImage> images,
-  ) async {
+    List<PayImage> images, [
+    List<PayInfo> infos = const [],
+  ]) async {
     final items = <PayItem>[
       for (var i = 0; i < drafts.length; i++) drafts[i].toPayItem(sortOrder: i),
     ];
-    await recordDao.update(record, items, images);
+    await recordDao.update(record, items, images, infos);
     await reload();
   }
 
@@ -151,6 +172,27 @@ class AppState extends ChangeNotifier {
 
   Future<void> deleteTemplate(int id) async {
     await templateDao.delete(id);
+    await reload();
+  }
+
+  // ------------------------------------------------------------ 发薪模板
+
+  Future<void> saveSalaryTemplate(SalaryTemplate t) async {
+    if (t.id == null) {
+      await salaryTemplateDao.insert(t);
+    } else {
+      await salaryTemplateDao.update(t);
+    }
+    await reload();
+  }
+
+  Future<void> deleteSalaryTemplate(int id) async {
+    await salaryTemplateDao.delete(id);
+    await reload();
+  }
+
+  Future<void> activateSalaryTemplate(int id) async {
+    await salaryTemplateDao.setActive(id);
     await reload();
   }
 

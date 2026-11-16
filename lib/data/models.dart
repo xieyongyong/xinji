@@ -14,6 +14,9 @@ const String kCategoryDeduction = 'deduction';
 const String kValueAmount = 'amount';
 const String kValueCoefficient = 'coefficient';
 
+/// 发薪模板字段分类：收入 / 扣款 / 信息（信息项不参与任何合计）
+const String kFieldInfo = 'info';
+
 /// 一条收入记录（一次发放）。
 ///
 /// 主表只保留**任何公司都必然存在**的字段：
@@ -46,6 +49,9 @@ class PayRecord {
   List<PayItem> items;
   List<PayImage> images;
 
+  /// 信息项：只记录、不计入合计（姓名、工号、业务单位、应出勤天数等）
+  List<PayInfo> infos;
+
   PayRecord({
     this.id,
     required this.periodYear,
@@ -60,6 +66,7 @@ class PayRecord {
     required this.updatedAt,
     this.items = const [],
     this.images = const [],
+    this.infos = const [],
   });
 
   bool get isMonthly => recordType == kTypeMonthly;
@@ -127,6 +134,7 @@ class PayRecord {
     int? updatedAt,
     List<PayItem>? items,
     List<PayImage>? images,
+    List<PayInfo>? infos,
   }) {
     return PayRecord(
       id: id ?? this.id,
@@ -142,8 +150,56 @@ class PayRecord {
       updatedAt: updatedAt ?? this.updatedAt,
       items: items ?? this.items,
       images: images ?? this.images,
+      infos: infos ?? this.infos,
     );
   }
+}
+
+/// 信息项：**只记录、永远不计入任何合计**。
+///
+/// 工资条上有一批"看一眼有用、但不能参与算钱"的内容：
+/// 业务单位、工号、姓名、薪级对应基薪、应出勤天数、考核评分……
+/// 早期版本把它们塞进 extra(JSON)，用户改不了也看不见。
+/// 现在单独一张表，可自由增删，且结构上不可能被算进合计。
+class PayInfo {
+  final int? id;
+  final int? recordId;
+  final String name;
+  final String value;
+  final int sortOrder;
+
+  PayInfo({
+    this.id,
+    this.recordId,
+    required this.name,
+    this.value = '',
+    this.sortOrder = 0,
+  });
+
+  Map<String, Object?> toMap() => {
+        if (id != null) 'id': id,
+        'record_id': recordId,
+        'name': name,
+        'value': value,
+        'sort_order': sortOrder,
+      };
+
+  factory PayInfo.fromMap(Map<String, Object?> m) => PayInfo(
+        id: m['id'] as int?,
+        recordId: m['record_id'] as int?,
+        name: (m['name'] as String?) ?? '',
+        value: (m['value'] as String?) ?? '',
+        sortOrder: (m['sort_order'] as int?) ?? 0,
+      );
+
+  PayInfo copyWith({int? id, int? recordId, String? name, String? value, int? sortOrder}) =>
+      PayInfo(
+        id: id ?? this.id,
+        recordId: recordId ?? this.recordId,
+        name: name ?? this.name,
+        value: value ?? this.value,
+        sortOrder: sortOrder ?? this.sortOrder,
+      );
 }
 
 /// 一条明细项（收入或扣款）。

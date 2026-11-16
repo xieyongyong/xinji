@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 
 import 'models.dart';
+import 'salary_template.dart';
 
 /// 本地 SQLite。
 ///
@@ -17,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 1,
+      version: 2,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -88,15 +89,121 @@ class AppDb {
       )
     ''');
 
+    await _createV2Tables(db);
     await _seedTemplates(db);
+    await _seedDefaultSalaryTemplate(db);
   }
 
-  /// 版本升级入口。将来加字段就在这里写 ALTER TABLE，用户数据不会丢。
+  /// v2 新增的三张表。
+  ///
+  /// 抽成函数是为了让「新建库」和「老库升级」走**同一段 SQL**，
+  /// 避免两边写得不一样导致新老用户行为不同（这种 bug 最难查）。
+  static Future<void> _createV2Tables(Database db) async {
+    // 信息项：只记录、不计入合计
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS record_info (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL DEFAULT '',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (record_id) REFERENCES pay_record(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_info_record ON record_info(record_id)');
+
+    // 发薪模板（可多套，仅一套 is_active = 1）
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS salary_template (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    ''');
+
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS template_field (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'income',
+        value_type TEXT NOT NULL DEFAULT 'amount',
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        FOREIGN KEY (template_id) REFERENCES salary_template(id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_field_template ON template_field(template_id)');
+  }
+
+  /// 版本升级入口。老用户的数据一条都不能丢，所以只做「加表/加字段」，从不删改。
   static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // 目前只有 v1。后续示例：
-    // if (oldVersion < 2) {
-    //   await db.execute('ALTER TABLE pay_record ADD COLUMN xxx TEXT');
-    // }
+    if (oldVersion < 2) {
+      // v2：信息项 + 发薪模板
+      await _createV2Tables(db);
+      await _seedDefaultSalaryTemplate(db);
+    }
+  }
+
+  /// 首次安装时预置一套「默认发薪模板」并设为生效。
+  ///
+  /// 这样用户第一次录入就能直接看到常用字段，不用从零一个个加。
+  static Future<void> _seedDefaultSalaryTemplate(Database db) async {
+    final existing = await db.query('salary_template', limit: 1);
+    if (existing.isNotEmpty) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final templateId = await db.insert('salary_template', {
+      'name': '默认发薪模板',
+      'is_active': 1,
+      'created_at': now,
+      'updated_at': now,
+    });
+
+    final fields = <TemplateField>[
+      // ---- 收入项
+      TemplateField(name: '基本工资', category: kCategoryIncome, sortOrder: 1),
+      TemplateField(name: '岗位津贴', category: kCategoryIncome, sortOrder: 2),
+      TemplateField(
+          name: '基本绩效',
+          category: kCategoryIncome,
+          sortOrder: 3),
+      TemplateField(
+          name: '绩效系数',
+          category: kCategoryIncome,
+          valueType: kValueCoefficient,
+          sortOrder: 4),
+      TemplateField(name: '绩效工资', category: kCategoryIncome, sortOrder: 5),
+      TemplateField(name: '工龄补贴', category: kCategoryIncome, sortOrder: 6),
+      TemplateField(name: '其他津贴', category: kCategoryIncome, sortOrder: 7),
+      TemplateField(name: '加班费', category: kCategoryIncome, sortOrder: 8),
+      // ---- 扣款项
+      TemplateField(name: '个人社保', category: kCategoryDeduction, sortOrder: 11),
+      TemplateField(name: '个人公积金', category: kCategoryDeduction, sortOrder: 12),
+      TemplateField(name: '所得税', category: kCategoryDeduction, sortOrder: 13),
+      TemplateField(name: '管理费', category: kCategoryDeduction, sortOrder: 14),
+      TemplateField(name: '水电费', category: kCategoryDeduction, sortOrder: 15),
+      TemplateField(name: '其他扣款', category: kCategoryDeduction, sortOrder: 16),
+      // ---- 信息项（不计入任何合计）
+      TemplateField(name: '姓名', category: kFieldInfo, sortOrder: 21),
+      TemplateField(name: '工号', category: kFieldInfo, sortOrder: 22),
+      TemplateField(name: '业务单位', category: kFieldInfo, sortOrder: 23),
+      TemplateField(name: '薪级', category: kFieldInfo, sortOrder: 24),
+      TemplateField(name: '薪级对应基薪', category: kFieldInfo, sortOrder: 25),
+      TemplateField(name: '应出勤天数', category: kFieldInfo, sortOrder: 26),
+    ];
+
+    final batch = db.batch();
+    for (final f in fields) {
+      final m = f.toMap();
+      m['template_id'] = templateId;
+      m.remove('id');
+      batch.insert('template_field', m);
+    }
+    await batch.commit(noResult: true);
   }
 
   /// 预置项目模板。用户随时可以改名、加别名、增删。
@@ -194,6 +301,7 @@ class AppDb {
 
   /// 仅供备份恢复使用：整体清空后重建
   static Future<void> resetAll(Database db) async {
+    await db.delete('record_info');
     await db.delete('pay_item');
     await db.delete('pay_image');
     await db.delete('pay_record');

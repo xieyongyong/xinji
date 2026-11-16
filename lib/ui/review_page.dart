@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../core/app_settings.dart';
 import '../core/money.dart';
 import '../data/models.dart';
+import '../data/salary_template.dart';
 import '../ocr/merge_engine.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
@@ -83,6 +85,9 @@ class _ReviewPageState extends State<ReviewPage> {
   final _noteCtrl = TextEditingController();
 
   final List<PayItemDraft> _items = [];
+
+  /// 信息项：只记录、不计入任何合计
+  final List<PayInfo> _infos = [];
   final List<PayImage> _images = [];
   MergeResult? _merge;
   bool _showDuplicates = false;
@@ -109,6 +114,7 @@ class _ReviewPageState extends State<ReviewPage> {
             coefficient: e.coefficient,
           )));
       _images.addAll(editing.images);
+      _infos.addAll(editing.infos);
       _grossCtrl.text = _plain(editing.grossCents);
       _deductionCtrl.text = _plain(editing.deductionCents);
       _netCtrl.text = _plain(editing.netCents);
@@ -136,6 +142,83 @@ class _ReviewPageState extends State<ReviewPage> {
       if (ded != null) _deductionCtrl.text = _plain(ded);
       if (net != null) _netCtrl.text = _plain(net);
     }
+
+    // 3) 按「当前生效的发薪模板」补齐字段
+    //    新建：整份预填；OCR：只补识别没覆盖到的，已识别的值优先
+    final tpl = context.read<AppState>().activeSalaryTemplate;
+    if (editing == null && tpl != null) {
+      _prefillFromTemplate(tpl, onlyMissing: widget.outcome != null);
+    }
+
+    // 4) 绩效自动计算
+    _applyPerfFormula();
+  }
+
+  /// 用模板预填字段。
+  ///
+  /// [onlyMissing] = true 时只补缺失项（OCR 场景，识别结果优先）。
+  void _prefillFromTemplate(SalaryTemplate tpl, {required bool onlyMissing}) {
+    final existItems = _items.map((e) => normalizeName(e.name)).toSet();
+    for (final f in [...tpl.incomeFields, ...tpl.deductionFields]) {
+      if (onlyMissing && existItems.contains(normalizeName(f.name))) continue;
+      if (existItems.contains(normalizeName(f.name))) continue;
+      _items.add(PayItemDraft(
+        name: f.name,
+        category: f.category,
+        valueType: f.valueType,
+        amountCents: 0,
+        coefficient: null,
+      ));
+    }
+
+    final existInfo = _infos.map((e) => normalizeName(e.name)).toSet();
+    for (final f in tpl.infoFields) {
+      if (existInfo.contains(normalizeName(f.name))) continue;
+      _infos.add(PayInfo(name: f.name, value: ''));
+    }
+  }
+
+  // ------------------------------------------------------------ 绩效公式
+
+  /// 基本绩效项的名称（用户可在模板里改名，这里做常见别名匹配）
+  static const List<String> _perfBaseNames = ['基本绩效', '绩效基数', '绩效标准', '绩效基本工资'];
+  static const List<String> _perfResultNames = ['绩效工资', '绩效奖金', '实发绩效'];
+
+  PayItemDraft? _findItem(List<String> names) {
+    for (final item in _items) {
+      if (normalizeName(item.name).isEmpty) continue;
+      for (final n in names) {
+        if (normalizeName(item.name) == normalizeName(n)) return item;
+      }
+    }
+    return null;
+  }
+
+  PayItemDraft? _findCoefficientItem() {
+    for (final item in _items) {
+      if (item.valueType == kValueCoefficient && item.coefficient != null) return item;
+    }
+    return null;
+  }
+
+  /// 绩效工资 = 基本绩效 × 绩效系数
+  ///
+  /// 只在设置里开启时才动，且三个要素（基本绩效、系数、绩效工资行）都齐全才计算，
+  /// 缺任何一个就保持手填 —— 绝不替用户猜。
+  void _applyPerfFormula() {
+    final settings = context.read<AppSettings>();
+    if (!settings.perfAuto) return;
+
+    final base = _findItem(_perfBaseNames);
+    final coefItem = _findCoefficientItem();
+    final result = _findItem(_perfResultNames);
+    if (base == null || coefItem == null || result == null) return;
+
+    final computed = (base.amountCents * coefItem.coefficient!).round();
+    if (result.amountCents == computed) return;
+
+    // PayItemDraft 的字段是可变的，直接改即可
+    result.amountCents = computed;
   }
 
   @override
@@ -209,6 +292,7 @@ class _ReviewPageState extends State<ReviewPage> {
       } else if (result.draft != null) {
         _items[index] = result.draft!;
       }
+      _applyPerfFormula();
     });
   }
 
@@ -225,7 +309,36 @@ class _ReviewPageState extends State<ReviewPage> {
       ),
     );
     if (result?.draft == null) return;
-    setState(() => _items.add(result!.draft!));
+    setState(() {
+      _items.add(result!.draft!);
+      _applyPerfFormula();
+    });
+  }
+
+  // ------------------------------------------------------------ 信息项操作
+
+  Future<void> _editInfo(int index) async {
+    final result = await showDialog<_InfoEditResult>(
+      context: context,
+      builder: (ctx) => _InfoEditDialog(info: _infos[index]),
+    );
+    if (result == null) return;
+    setState(() {
+      if (result.deleted) {
+        _infos.removeAt(index);
+      } else if (result.info != null) {
+        _infos[index] = result.info!;
+      }
+    });
+  }
+
+  Future<void> _addInfo() async {
+    final result = await showDialog<_InfoEditResult>(
+      context: context,
+      builder: (ctx) => _InfoEditDialog(info: PayInfo(name: '', value: ''), isNew: true),
+    );
+    if (result?.info == null) return;
+    setState(() => _infos.add(result!.info!));
   }
 
   void _applyComputedTotals() {
@@ -298,11 +411,14 @@ class _ReviewPageState extends State<ReviewPage> {
       ..._items.where((e) => e.category == kCategoryDeduction),
     ];
 
+    // 空名字的信息项不落库（模板预填后用户没填值的，保留但值为空）
+    final infos = _infos.where((e) => e.name.trim().isNotEmpty).toList();
+
     try {
       if (_isEdit) {
-        await state.updateRecord(record, ordered, _images);
+        await state.updateRecord(record, ordered, _images, infos);
       } else {
-        await state.insertRecord(record, ordered, _images);
+        await state.insertRecord(record, ordered, _images, infos);
       }
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -348,6 +464,12 @@ class _ReviewPageState extends State<ReviewPage> {
           if (_merge != null) _mergeSummary(),
           _periodCard(),
           const SizedBox(height: 14),
+          if (context.watch<AppSettings>().perfAuto &&
+              _findItem(_perfBaseNames) != null &&
+              _findCoefficientItem() != null) ...[
+            _perfHint(),
+            const SizedBox(height: 10),
+          ],
           _section(
             title: '收入项',
             subtitle: '合计 ${formatCents(_incomeSum)}',
@@ -363,6 +485,8 @@ class _ReviewPageState extends State<ReviewPage> {
             items: _items.where((e) => e.category == kCategoryDeduction).toList(),
             onAdd: () => _addItem(kCategoryDeduction),
           ),
+          const SizedBox(height: 14),
+          _infoCard(),
           const SizedBox(height: 14),
           _totalsCard(),
           const SizedBox(height: 14),
@@ -713,6 +837,122 @@ class _ReviewPageState extends State<ReviewPage> {
     );
   }
 
+  /// 绩效公式提示条：告诉用户"这行是算出来的，不是手填的"
+  Widget _perfHint() {
+    final base = _findItem(_perfBaseNames);
+    final coefItem = _findCoefficientItem();
+    final baseText = base == null ? '基本绩效' : base.name;
+    final coef = coefItem?.coefficient;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: kInfoBg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.functions, size: 15, color: kSeed),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Text(
+              coef == null
+                  ? '$baseText × 绩效系数 自动计算（系数未填，先填系数）'
+                  : '$baseText ${formatCents(base?.amountCents ?? 0)} × ${coef.toStringAsFixed(2)}'
+                      ' = 绩效工资自动更新',
+              style: const TextStyle(fontSize: 11.8, color: Color(0xFF3D5A54), height: 1.4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 信息项卡片：姓名、工号、业务单位、应出勤天数…这些**不参与任何计算**
+  Widget _infoCard() {
+    return Container(
+      decoration: cardDecoration(),
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 13, 16, 9),
+            child: Row(
+              children: [
+                Container(
+                  width: 3,
+                  height: 14,
+                  decoration: BoxDecoration(
+                      color: const Color(0xFF9AA09A),
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+                const SizedBox(width: 8),
+                const Text('信息项',
+                    style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                const Text('不计入合计',
+                    style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+              ],
+            ),
+          ),
+          if (_infos.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('暂无。可记录姓名、工号、业务单位、应出勤天数等',
+                    style: TextStyle(fontSize: 12, color: Color(0xFFB0B5B0))),
+              ),
+            ),
+          for (var i = 0; i < _infos.length; i++)
+            InkWell(
+              onTap: () => _editInfo(i),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: Text(
+                        _infos[i].name.isEmpty ? '（未命名）' : _infos[i].name,
+                        style: const TextStyle(fontSize: 13, color: Color(0xFF4A4F4A)),
+                      ),
+                    ),
+                    Expanded(
+                      flex: 5,
+                      child: Text(
+                        _infos[i].value.isEmpty ? '—' : _infos[i].value,
+                        textAlign: TextAlign.right,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: _infos[i].value.isEmpty
+                              ? const Color(0xFFC4C9C4)
+                              : const Color(0xFF1B1C1B),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.edit_outlined, size: 14, color: Color(0xFFC4C9C4)),
+                  ],
+                ),
+              ),
+            ),
+          InkWell(
+            onTap: _addInfo,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              child: Row(
+                children: const [
+                  Icon(Icons.add_circle_outline, size: 16, color: Color(0xFF7A807A)),
+                  SizedBox(width: 6),
+                  Text('添加信息项', style: TextStyle(fontSize: 13, color: Color(0xFF7A807A))),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _totalsCard() {
     final gross = _parseCtrl(_grossCtrl);
     final deduction = _parseCtrl(_deductionCtrl);
@@ -846,6 +1086,99 @@ class _ReviewPageState extends State<ReviewPage> {
 }
 
 // ---------------------------------------------------------------- 子弹窗
+
+class _InfoEditResult {
+  final PayInfo? info;
+  final bool deleted;
+  _InfoEditResult({this.info, this.deleted = false});
+}
+
+/// 信息项编辑弹窗（名称 + 值，纯文本，不做任何金额校验）
+class _InfoEditDialog extends StatefulWidget {
+  final PayInfo info;
+  final bool isNew;
+
+  const _InfoEditDialog({required this.info, this.isNew = false});
+
+  @override
+  State<_InfoEditDialog> createState() => _InfoEditDialogState();
+}
+
+class _InfoEditDialogState extends State<_InfoEditDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _valueCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.info.name);
+    _valueCtrl = TextEditingController(text: widget.info.value);
+  }
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _valueCtrl.dispose();
+    super.dispose();
+  }
+
+  void _confirm() {
+    final name = _nameCtrl.text.trim();
+    if (name.isEmpty) return;
+    Navigator.of(context).pop(_InfoEditResult(
+      info: widget.info.copyWith(name: name, value: _valueCtrl.text.trim()),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.isNew ? '添加信息项' : '编辑信息项'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _nameCtrl,
+            autofocus: widget.isNew,
+            decoration: const InputDecoration(
+              labelText: '名称',
+              hintText: '如：姓名 / 工号 / 应出勤天数',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _valueCtrl,
+            decoration: const InputDecoration(
+              labelText: '内容',
+              hintText: '如：张三 / A1234 / 21',
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text('信息项只做记录，不会计入任何合计',
+                style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+          ),
+        ],
+      ),
+      actions: [
+        if (!widget.isNew)
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_InfoEditResult(deleted: true)),
+            style: TextButton.styleFrom(foregroundColor: kUp),
+            child: const Text('删除'),
+          ),
+        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
+        FilledButton(onPressed: _confirm, child: const Text('确定')),
+      ],
+    );
+  }
+}
 
 class _ItemEditResult {
   final PayItemDraft? draft;

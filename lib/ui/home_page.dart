@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../core/app_settings.dart';
 import '../core/money.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
@@ -322,7 +323,9 @@ class _HomePageState extends State<HomePage> {
 
   Widget _deltaChip(int delta) {
     final up = delta > 0;
-    final color = delta == 0 ? const Color(0xFF9AA09A) : (up ? kUp : kDown);
+    final color = delta == 0
+        ? const Color(0xFF9AA09A)
+        : context.watch<AppSettings>().diffColor(delta);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

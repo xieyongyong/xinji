@@ -179,9 +179,16 @@ class BackupService {
     final items = (data['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final images = (data['images'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final templates = (data['templates'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    // v2 备份才有这两块，老备份读出来是 null，走空列表即可
+    final infos = (data['infos'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final salaryTemplates =
+        (data['salary_templates'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final templateFields =
+        (data['template_fields'] as List?)?.cast<Map<String, dynamic>>() ?? [];
 
     await db.transaction((txn) async {
       // 全量替换：先清空，再按原 id 插回，保证外键关系不变
+      await txn.delete('record_info');
       await txn.delete('pay_item');
       await txn.delete('pay_image');
       await txn.delete('pay_record');
@@ -217,6 +224,28 @@ class BackupService {
           'id', 'name', 'category', 'aliases', 'value_type', 'sort_order', 'enabled',
         }));
       }
+
+      for (final info in infos) {
+        await txn.insert('record_info', _sanitize(info, const {
+          'id', 'record_id', 'name', 'value', 'sort_order',
+        }));
+      }
+
+      // 发薪模板：只有新备份才带，老备份不覆盖用户现有模板
+      if (salaryTemplates.isNotEmpty) {
+        await txn.delete('template_field');
+        await txn.delete('salary_template');
+        for (final st in salaryTemplates) {
+          await txn.insert('salary_template', _sanitize(st, const {
+            'id', 'name', 'is_active', 'created_at', 'updated_at',
+          }));
+        }
+        for (final tf in templateFields) {
+          await txn.insert('template_field', _sanitize(tf, const {
+            'id', 'template_id', 'name', 'category', 'value_type', 'sort_order',
+          }));
+        }
+      }
     });
 
     return BackupImportResult(
@@ -245,6 +274,11 @@ class BackupService {
     final imageRows = await db.query('pay_image');
     final templates = await db.query('item_template');
 
+    // v2 新增：信息项 + 发薪模板（都属于用户数据，必须一起备份）
+    final infos = await db.query('record_info');
+    final salaryTemplates = await db.query('salary_template');
+    final templateFields = await db.query('template_field');
+
     final images = <Map<String, dynamic>>[];
     for (final row in imageRows) {
       final abs = row['file_path'] as String? ?? '';
@@ -259,12 +293,17 @@ class BackupService {
 
     return {
       'app': 'xinji',
-      'version': 1,
+      'version': 2,
       'exported_at': DateTime.now().toIso8601String(),
       'records': records.map((e) => Map<String, dynamic>.from(e)).toList(),
       'items': items.map((e) => Map<String, dynamic>.from(e)).toList(),
       'images': images,
       'templates': templates.map((e) => Map<String, dynamic>.from(e)).toList(),
+      'infos': infos.map((e) => Map<String, dynamic>.from(e)).toList(),
+      'salary_templates':
+          salaryTemplates.map((e) => Map<String, dynamic>.from(e)).toList(),
+      'template_fields':
+          templateFields.map((e) => Map<String, dynamic>.from(e)).toList(),
     };
   }
 
