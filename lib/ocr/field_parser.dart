@@ -97,10 +97,11 @@ class FieldParser {
   }) {
     final visualRows = LineBuilder.build(lines);
     final skip = _watermarkTexts(visualRows);
+    final fragments = _watermarkFragments(skip);
     final ctx = _ColumnContext.of(visualRows, skip);
     final rows = <ParsedRow>[];
     for (final vr in visualRows) {
-      final row = _parseRow(vr, index, ctx, skip);
+      final row = _parseRow(vr, index, ctx, skip, fragments);
       if (row != null) rows.add(row);
     }
     return ParsedImage(
@@ -111,25 +112,106 @@ class FieldParser {
     );
   }
 
-  /// 找出「水印文字」：同一段文字在一张图里重复出现 3 次以上。
+  /// 找出「水印文字」：同一段文字在一张图里重复出现多次。
   ///
   /// 真实场景：企业工资条截图上铺满了浅灰色的"安心工资条 1279"水印，
   /// OCR 会把它们当正文抓出来，夹在"部门"和"产品开发技术支持部"中间，
   /// 于是部门名变成"1279产品开发技术支持部"、金额列变成 1279。
-  /// 正常工资条的项目名/金额一个月只会出现一次，重复三次以上的基本就是水印。
+  /// 正常工资条的项目名/金额一个月只会出现一次，重复多次的基本就是水印。
+  ///
+  /// 注：像素层的浅灰水印已经由原生 `TileCleaner` 在识别前刷白了，
+  /// 这里兜的是「水印比纸面深、刷不掉」以及「水印和正文黏成一串」的情况。
   Set<String> _watermarkTexts(List<VisualRow> rows) {
+    // 同一串文字重复这么多次 → 判定为水印
+    const sameTextTimes = 3;
+    // 5 个字以上的长串只要重复两次就够了：真实项目名不会一模一样出现两回
+    const sameLongTextTimes = 2;
+
     final freq = <String, int>{};
+    final raw = <String, List<String>>{};
     for (final row in rows) {
       for (final c in row.cells) {
         final t = c.text.trim();
         if (t.length < 3) continue;
-        freq[t] = (freq[t] ?? 0) + 1;
+        // 归一化再计数："安心工资条 1279" 和 "安心工资条1279" 要算同一串，
+        // 否则 OCR 多认/少认一个空格就漏过去了。
+        final key = _watermarkKey(t);
+        if (!_couldBeWatermark(t, key)) continue;
+        freq[key] = (freq[key] ?? 0) + 1;
+        (raw[key] ??= <String>[]).add(t);
       }
     }
-    return {
-      for (final e in freq.entries)
-        if (e.value >= 3) e.key,
-    };
+
+    final out = <String>{};
+    for (final e in freq.entries) {
+      final key = e.key;
+      final hit = e.value >= sameTextTimes ||
+          (key.length >= 5 && e.value >= sameLongTextTimes);
+      if (hit) out.addAll(raw[key]!);
+    }
+    return out;
+  }
+
+  /// 计数的归一化键：去掉空白和标点，只留字与数字
+  String _watermarkKey(String text) =>
+      text.replaceAll(RegExp(r'[\s:：,，.。、\-—_｜|/\\()（）\[\]【】]'), '');
+
+  /// 只有「不像钱」的文字才可能是水印。
+  ///
+  /// 带小数点的金额（0.00 / 1,826.50）重复出现是正常的（好几项都是 0.00），
+  /// 不能当水印丢掉；而水印里的编号（1279）是不带小数点的整数，
+  /// 用这一条既保住了零金额行，又留住了编号水印。
+  ///
+  /// 注意必须拿**原文**判断：归一化时已经把小数点去掉了。
+  bool _couldBeWatermark(String rawText, String key) {
+    if (key.isEmpty) return false;
+    if (RegExp(r'\d[.,]\d').hasMatch(rawText)) return false;
+    return true;
+  }
+
+  /// 水印碎片：整串水印里切出来的、够长够独特的片段。
+  ///
+  /// 用途是把「1279产品开发技术支持部」这种「水印 + 正文黏成一个文本框」
+  /// 的名字还原成「产品开发技术支持部」—— 黏起来以后整串不会重复，
+  /// 上面按整串去重的规则就完全失效了。
+  Set<String> _watermarkFragments(Set<String> cells) {
+    final out = <String>{};
+    for (final cell in cells) {
+      final compact = cell.replaceAll(RegExp(r'\s+'), '');
+      if (compact.length >= 3) out.add(compact);
+      for (final m in RegExp(r'[\u4e00-\u9fa5]{2,}').allMatches(compact)) {
+        out.add(m.group(0)!);
+      }
+      for (final m in RegExp(r'\d{3,}').allMatches(compact)) {
+        out.add(m.group(0)!);
+      }
+    }
+    out.removeWhere((e) => e.isEmpty);
+    return out;
+  }
+
+  /// 从名字的**两端**剥掉水印碎片（中间不动，那里可能是真实内容）
+  String _trimWatermarkFragments(String name, Set<String> fragments) {
+    if (fragments.isEmpty) return name;
+    var s = name.trim();
+    var changed = true;
+    while (changed && s.isNotEmpty) {
+      changed = false;
+      for (final f in fragments) {
+        if (f.isEmpty) continue;
+        if (s.startsWith(f)) {
+          s = s.substring(f.length).trim();
+          changed = true;
+          break;
+        }
+        if (s.endsWith(f)) {
+          s = s.substring(0, s.length - f.length).trim();
+          changed = true;
+          break;
+        }
+      }
+    }
+    return s;
   }
 
   // ---------------------------------------------------------------- 单行解析
@@ -139,6 +221,7 @@ class FieldParser {
     int imageIndex,
     _ColumnContext ctx,
     Set<String> skip,
+    Set<String> fragments,
   ) {
     final cells = row.cells.where((c) => !skip.contains(c.text.trim())).toList();
     if (cells.isEmpty) return null;
@@ -200,7 +283,12 @@ class FieldParser {
     }
     // amountCellIndex == 0 表示金额在最左、左边没有名称 → 留给折行合并去补
 
-    final rawName = name.isEmpty ? text : name;
+    // 水印和正文黏在一个文本框里（"1279产品开发技术支持部"）时，
+    // 整串去重规则救不了，只能把两端的碎片剥掉。
+    // 万一剥空了（碎片恰好是整行名字），退回原文，绝不因此丢行。
+    var rawName = _trimWatermarkFragments(name, fragments);
+    if (rawName.isEmpty) rawName = name.trim();
+    if (rawName.isEmpty) rawName = text;
     final label = normalizeName(rawName);
 
     // 3) 系数行（绩效系数 1.20）：不能当钱算进合计。

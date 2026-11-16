@@ -1,7 +1,7 @@
 name: xinji
 description: 薪迹 · 本地工资条记录、归档与对比
 publish_to: 'none'
-version: 1.5.1+6
+version: 1.6.0+7
 
 environment:
   sdk: '>=3.3.0 <4.0.0'

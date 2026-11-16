@@ -253,7 +253,9 @@ class OcrService : Service() {
 
                 // 这一行是排查 native 崩溃的关键线索：
                 // 日志停在这里，就说明 ML Kit 处理 ${w}x${h} 的图时挂了
-                trace("图$index 块$ti ${w}x$h 识别开始")
+                // 后面的「去灰」是水印清理结果，识别不准时先看这个数
+                val cleanInfo = tile["clean"] as? String ?: "-"
+                trace("图$index 块$ti ${w}x$h 识别开始 去灰=$cleanInfo")
 
                 val image = InputImage.fromFilePath(this, Uri.fromFile(f))
                 val result = Tasks.await(
