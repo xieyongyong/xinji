@@ -1,15 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        网络权限：只为了「检查更新」这一个功能（v1.9 起）。
+
+        工资数据、工资条图片、识别过程**全部只在本机**：
+        既不上传，也不做云同步，识别是本地 ONNX 推理。
+        这个权限的实际用途只有一个 —— 去 GitHub 读一下最新 Release 的版本号。
+        如果不想要这个权限，删掉这一行即可，App 其余功能不受影响，
+        只是设置页的「检查更新」会提示网络不可用。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- 应用锁用的生物识别权限（local_auth） -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- Android 9 及以下的指纹接口，保留以兼容老系统 -->
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
     <!--
-        注意：这里【故意】没有声明 android.permission.INTERNET。
-        V1 全程离线，APK 里没有网络权限，等于从系统层面保证工资数据不可能外传。
-        什么时候需要加回来：将来做云同步 / 云端 OCR 时。
-
         也【故意】没有声明 CAMERA 权限。
         image_picker 是调系统相机 App 拍照取回结果，属于「委托拍照」，
         此时如果本 App 声明了 CAMERA 权限却没有运行时申请，会直接抛 SecurityException。
@@ -29,10 +36,11 @@
         <!--
             文字识别服务，跑在独立进程 :ocr。
 
-            为什么必须独立进程：ML Kit 中文识别是纯 native 实现，在部分设备上
-            会直接段错误或被系统 OOM 杀掉。放在主进程里就是「整个 App 闪退，
-            Dart 层来不及抛异常，日志空白」。隔离之后，这个进程死了主 App 还在，
-            OcrBridge 会收到连接断开回调，界面提示「可手动填」，图片也不会丢。
+            为什么还要独立进程：识别引擎是 ONNX Runtime（native 库）跑 PP-OCR 模型，
+            设备内存紧张、so 和 CPU 架构不匹配、模型文件被裁坏，都可能让进程直接消失。
+            放在主进程里就是「整个 App 闪退，Dart 层来不及抛异常，日志空白」。
+            隔离之后，这个进程死了主 App 还在，OcrBridge 会收到连接断开回调，
+            界面提示「可手动填」，图片也不会丢。
 
             exported=false：只有本 App 能启动它，不对外暴露。
         -->

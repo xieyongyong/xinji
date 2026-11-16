@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/app_settings.dart';
+import '../core/app_update.dart';
 import '../core/money.dart';
 import '../data/employer.dart';
 import '../data/models.dart';
@@ -17,6 +18,7 @@ import 'review_page.dart';
 import 'settings_page.dart';
 import 'theme.dart';
 import 'stats_page.dart';
+import 'update_dialog.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -34,7 +36,24 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybePromptLock());
+    // 排成一条链：先问要不要开锁，再查更新。
+    // 两个弹窗同时抢屏会叠在一起，而且"要不要加把锁"优先级更高。
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _maybePromptLock();
+      await _maybeCheckUpdate();
+    });
+  }
+
+  /// 启动时静默检查更新（一天最多一次）。
+  ///
+  /// 失败一律不打扰：这类"锦上添花"的功能不该在打开 App 时弹错误框。
+  /// 想主动看结果去「设置 → 检查更新」。
+  Future<void> _maybeCheckUpdate() async {
+    final latest = await UpdateChecker.autoCheck();
+    if (latest == null || !mounted) return;
+    final current = await UpdateChecker.currentVersion();
+    if (!mounted) return;
+    await showUpdateDialog(context, latest, currentVersion: current, auto: true);
   }
 
   /// 首次使用时引导开启应用锁（只弹一次，随时可跳过）

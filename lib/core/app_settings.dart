@@ -10,14 +10,6 @@ class AppSettings extends ChangeNotifier {
   static const _kDownColor = 'color_down';
   static const _kCompressImages = 'compress_images';
   static const _kDeWatermark = 'de_watermark';
-  static const _kOcrEngine = 'ocr_engine';
-
-  /// 识别引擎：`ppocr`（PP-OCRv6，默认）/ `mlkit`（老的兼容模式）
-  ///
-  /// 留这个开关不是为了"以后再选"，而是引擎级的逃生门：
-  /// PP-OCR 走 ONNX Runtime，个别机型/系统上如果加载不起来，
-  /// 用户切回 ML Kit 就能继续用，不必等我发新版本。
-  String ocrEngine = 'ppocr';
 
   /// 绩效工资是否按「基本绩效 × 绩效系数」自动计算
   bool perfAuto = false;
@@ -50,15 +42,7 @@ class AppSettings extends ChangeNotifier {
     downColorValue = sp.getInt(_kDownColor) ?? 0xFF2E7D32;
     compressImages = sp.getBool(_kCompressImages) ?? true;
     deWatermark = sp.getBool(_kDeWatermark) ?? true;
-    ocrEngine = sp.getString(_kOcrEngine) ?? 'ppocr';
     notifyListeners();
-  }
-
-  Future<void> setOcrEngine(String v) async {
-    ocrEngine = v;
-    notifyListeners();
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(_kOcrEngine, v);
   }
 
   Future<void> setCompressImages(bool v) async {

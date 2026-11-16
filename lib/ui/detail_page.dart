@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../core/money.dart';
+import '../data/item_order.dart';
 import '../data/models.dart';
 import '../state/app_state.dart';
 import 'compare_page.dart';
@@ -31,15 +32,22 @@ class DetailPage extends StatelessWidget {
       );
     }
 
-    final incomes = record.items.where((e) => e.isIncome).toList();
-    final deductions = record.items.where((e) => e.isDeduction).toList();
+    // 顺序统一按这家雇主**当前生效模板**的字段顺序排，而不是只信库里的 sort_order。
+    // 为什么两者都要：sort_order 保证"录入时怎么排就怎么存"，
+    // 这里再按模板排一次，是为了让升级前录入的老记录、以及后来调整过模板的记录
+    // 也和最近几个月的顺序对齐 —— 用户看到的永远是同一套顺序。
+    final tpl = state.activeTemplateFor(record.employerId);
+    final incomes =
+        orderItemsByTemplate(record.items.where((e) => e.isIncome).toList(), tpl);
+    final deductions =
+        orderItemsByTemplate(record.items.where((e) => e.isDeduction).toList(), tpl);
+    final infos = orderInfosByTemplate(record.infos, tpl);
     final incomeSum = incomes
         .where((e) => e.countsInTotal)
         .fold(0, (s, e) => s + e.amountCents);
     final deductionSum =
         deductions.where((e) => e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
     final note = record.extra?['note'];
-
     return Scaffold(
       appBar: AppBar(
         title: Text('${record.periodYear}年${record.periodMonth}月'),
@@ -132,7 +140,7 @@ class DetailPage extends StatelessWidget {
             ),
           if (deductions.isNotEmpty) const SizedBox(height: 14),
           if (record.infos.isNotEmpty) ...[
-            _infosCard(record),
+            _infosCard(infos),
             const SizedBox(height: 14),
           ],
           if (record.images.isNotEmpty) _imagesCard(context, record),
@@ -341,7 +349,7 @@ class DetailPage extends StatelessWidget {
   }
 
   /// 信息项：姓名、工号、业务单位、应出勤天数…不参与合计
-  Widget _infosCard(PayRecord r) {
+  Widget _infosCard(List<PayInfo> infos) {
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 13, 14, 8),
       decoration: cardDecoration(),
@@ -365,7 +373,7 @@ class DetailPage extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 6),
-          for (final info in r.infos)
+          for (final info in infos)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Row(

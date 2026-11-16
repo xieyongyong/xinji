@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../core/app_settings.dart';
 import '../core/money.dart';
 import '../data/employer.dart';
+import '../data/item_order.dart';
 import '../data/models.dart';
 import '../data/salary_template.dart';
 import '../ocr/merge_engine.dart';
@@ -115,6 +116,11 @@ class _ReviewPageState extends State<ReviewPage> {
   bool _showDuplicates = false;
   bool _saving = false;
 
+  /// 本次录入用的发薪模板。明细顺序一律按它的字段顺序排 ——
+  /// 存下来是因为雇主/模板可能在页面停留期间被别处改掉，
+  /// 同一个页面里必须始终用同一套顺序，否则改一项就整体重排。
+  SalaryTemplate? _template;
+
   bool get _isEdit => widget.editing != null;
 
   /// 工资条标题上认出来的年月（识别不到为 false）
@@ -212,12 +218,34 @@ class _ReviewPageState extends State<ReviewPage> {
     // 3) 按「这家雇主的发薪模板」补齐字段
     //    新建：整份预填；OCR：只补识别没覆盖到的，已识别的值优先
     final tpl = appState.activeTemplateFor(_employerId);
+    _template = tpl;
     if (editing == null && tpl != null) {
       _prefillFromTemplate(tpl, onlyMissing: widget.outcome != null);
     }
 
+    // 3.5) 顺序：不管数据来自 OCR、模板预填还是历史记录，
+    //      统一按模板字段顺序重排一次。这样同一套模板导进来的工资条，
+    //      行序永远一致，跨月对比才不会错位。
+    _normalizeOrder();
+
     // 4) 绩效自动计算
     _applyPerfFormula();
+  }
+
+  /// 按模板顺序重排明细与信息项（原地改 [_items] / [_infos]）。
+  ///
+  /// 模板里没有的项排在同类末尾 —— 它们多半是这次新冒出来的项目，
+  /// 保持 OCR 认出来的相对顺序即可。
+  void _normalizeOrder() {
+    final items = orderDraftsByTemplate(_items, _template);
+    _items
+      ..clear()
+      ..addAll(items);
+
+    final infos = orderInfosByTemplate(_infos, _template);
+    _infos
+      ..clear()
+      ..addAll(infos);
   }
 
   /// 用模板预填字段。
@@ -430,6 +458,7 @@ class _ReviewPageState extends State<ReviewPage> {
               : (draft.amountCents / 100).toStringAsFixed(2),
           sortOrder: _infos.length,
         ));
+        _normalizeOrder();
         _applyPerfFormula();
       });
       if (result.remember) await _rememberCategory(draft.name, kFieldInfo);
@@ -442,6 +471,9 @@ class _ReviewPageState extends State<ReviewPage> {
       } else if (result.draft != null) {
         _items[index] = result.draft!;
       }
+      // 改了名字/类别之后位置可能变（比如收入改成扣款），
+      // 立刻按模板重排，用户才能看到「这项就跑到了该在的位置」
+      _normalizeOrder();
       _applyPerfFormula();
     });
 
@@ -498,6 +530,8 @@ class _ReviewPageState extends State<ReviewPage> {
     if (result?.draft == null) return;
     setState(() {
       _items.add(result!.draft!);
+      // 新增后立刻归位：模板里有这一项就插到它的位置，没有就落在同类末尾
+      _normalizeOrder();
       _applyPerfFormula();
     });
   }
@@ -593,11 +627,10 @@ class _ReviewPageState extends State<ReviewPage> {
       updatedAt: now,
     );
 
-    // 明细排序：收入在前、扣款在后，保持录入顺序
-    final ordered = <PayItemDraft>[
-      ..._items.where((e) => e.category == kCategoryIncome),
-      ..._items.where((e) => e.category == kCategoryDeduction),
-    ];
+    // 明细落库顺序：按模板字段顺序（收入在前、扣款在后）。
+    // 存下来的 sort_order 就是详情页的显示顺序，所以这里排好，
+    // 以后打开这条记录看到的顺序和当时录入的一致。
+    final ordered = orderDraftsByTemplate(_items, _template);
 
     // 空名字的信息项不落库（模板预填后用户没填值的，保留但值为空）
     final infos = _infos.where((e) => e.name.trim().isNotEmpty).toList();
@@ -848,6 +881,8 @@ class _ReviewPageState extends State<ReviewPage> {
                           setState(() {
                             _items.add(dup);
                             m.removedDuplicates.remove(dup);
+                            // 撤回的行也要回到模板里的位置，不能随手挂在末尾
+                            _normalizeOrder();
                           });
                         },
                         child: const Text('撤回',

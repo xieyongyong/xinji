@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_service.dart';
 import '../core/app_settings.dart';
+import '../core/app_update.dart';
 import '../core/crash_log.dart';
 import '../data/db.dart';
 import '../data/models.dart';
@@ -18,6 +19,7 @@ import 'employer_page.dart';
 import 'lock_page.dart';
 import 'salary_template_page.dart';
 import 'theme.dart';
+import 'update_dialog.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -29,6 +31,17 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   bool _busy = false;
   String _busyText = '';
+
+  /// 当前安装包版本（从原生 PackageManager 读，和系统里显示的一致）
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    UpdateChecker.currentVersion().then((v) {
+      if (mounted) setState(() => _version = v);
+    });
+  }
 
   Future<void> _verifyPin() async {
     final lock = context.read<LockService>();
@@ -268,6 +281,83 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // ------------------------------------------------------------ 检查更新
+
+  /// 手动检查更新。和启动时的自动检查共用同一套逻辑，
+  /// 区别只是：这里失败要明说原因（自动检查是静默的）。
+  Future<void> _checkUpdate() async {
+    final current =
+        _version.isEmpty ? await UpdateChecker.currentVersion() : _version;
+    if (!mounted) return;
+
+    setState(() {
+      _busy = true;
+      _busyText = '正在检查更新…';
+    });
+
+    ReleaseInfo? latest;
+    String? error;
+    try {
+      latest = await UpdateChecker.fetchLatest();
+      await UpdateChecker.markChecked();
+    } catch (e) {
+      error = e is UpdateException ? e.message : '$e';
+    }
+
+    if (!mounted) return;
+    setState(() => _busy = false);
+
+    if (error != null) {
+      await _showUpdateError(error);
+      return;
+    }
+    final found = latest;
+    if (found == null) {
+      _fail('远端还没有发布过正式版本');
+      return;
+    }
+    if (UpdateChecker.compareVersions(found.version, current) <= 0) {
+      // 已经是最新：顺手把"以后再说"的记录清掉，下次真有新版才会弹
+      await UpdateChecker.skipVersion('');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已是最新版本 $current')),
+      );
+      return;
+    }
+
+    await showUpdateDialog(context, found, currentVersion: current);
+  }
+
+  /// 检查更新失败时，给出原因 + 一条"手动去 Release 页看看"的退路
+  Future<void> _showUpdateError(String message) async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('检查更新失败'),
+        content: Text(
+          '$message\n\n'
+          '也可以直接用浏览器打开 Release 页面，手动下载最新安装包。',
+          style: const TextStyle(fontSize: 13.5, height: 1.6),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('知道了')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('打开页面'),
+          ),
+        ],
+      ),
+    );
+    if (go == true) {
+      try {
+        await UpdateChecker.openUrl('https://github.com/${UpdateChecker.repo}/releases');
+      } catch (_) {
+        // 连浏览器都打不开就不用再提示了
+      }
+    }
+  }
+
   // ------------------------------------------------------------ UI
 
   @override
@@ -402,21 +492,6 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 18),
               _sectionTitle('图片与识别'),
               _card([
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  leading: const Icon(Icons.text_fields, size: 20, color: Color(0xFF4A4F4A)),
-                  title: const Text('识别引擎', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    settings.ocrEngine == 'mlkit'
-                        ? '兼容模式（ML Kit）。识别不稳、或 PP-OCR 在这台机器上起不来时用这个。'
-                        : 'PP-OCRv6。密集数字、小数点、表格比老引擎准，完全离线。',
-                    style: const TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
-                  ),
-                  isThreeLine: true,
-                  trailing: const Icon(Icons.chevron_right, size: 18, color: Color(0xFFB9BEB9)),
-                  onTap: () => _pickEngine(settings),
-                ),
-                const Divider(height: 1),
                 SwitchListTile(
                   value: settings.compressImages,
                   onChanged: (v) => settings.setCompressImages(v),
@@ -497,11 +572,17 @@ class _SettingsPageState extends State<SettingsPage> {
               _card([
                 _item(
                   icon: Icons.info_outline,
-                  // 不写版本号：CI 用 1.0.<构建号> 覆盖 build-name，
-                  // 这里写死一个版本反而和系统里显示的打架
                   title: '薪迹 · 本地存档',
-                  subtitle: '共记录 ${state.records.length} 条'
+                  subtitle: '${_version.isEmpty ? '' : '版本 $_version · '}'
+                      '共记录 ${state.records.length} 条'
                       '（${state.employers.length} 家雇主）',
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.system_update_alt,
+                  title: '检查更新',
+                  subtitle: '从 GitHub Releases 看有没有新版本（只读版本号，不上传任何数据）',
+                  onTap: _checkUpdate,
                 ),
                 const Divider(height: 1),
                 _item(
@@ -514,8 +595,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 const Padding(
                   padding: EdgeInsets.all(14),
                   child: Text(
-                    '所有数据只存在这台手机里，不上传、不联网、不同步。'
-                    '识别也全部在本地完成。\n\n'
+                    '所有工资数据、工资条图片都只存在这台手机里，'
+                    '不上传、不同步，识别也全部在本机完成。\n\n'
+                    '唯一会联网的地方是「检查更新」：只向 GitHub 读一下最新版本号，'
+                    '不会带走任何数据。\n\n'
                     '卸载 App 会连同数据一起删除，请定期导出备份。',
                     style: TextStyle(fontSize: 12, height: 1.8, color: Color(0xFF8A8F8A)),
                   ),
@@ -636,80 +719,6 @@ class _SettingsPageState extends State<SettingsPage> {
   ///    看「进程=…:ocr」就知道崩的是识别进程还是主进程。
   /// 2. `ocr_trace.log` —— 识别进程写的一行行面包屑，最后一行就是崩在哪一步。
   /// 3. `crash.log` —— Dart 层能抓到的异常。
-  /// 切换识别引擎。
-  ///
-  /// 做成弹窗而不是下拉，是因为这两个选项的差别需要解释：
-  /// PP-OCR 更准但依赖 ONNX Runtime；ML Kit 是原来那套，慢一点、数字容易糊，
-  /// 但在任何机型上都起得来。这就是引擎级的"逃生门"。
-  Future<void> _pickEngine(AppSettings settings) async {
-    final picked = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('识别引擎', style: TextStyle(fontSize: 15)),
-        children: [
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'ppocr'),
-            child: Row(
-              children: [
-                Icon(
-                  settings.ocrEngine == 'ppocr'
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  size: 18,
-                  color: const Color(0xFF3F6B4C),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('PP-OCRv6（推荐）', style: TextStyle(fontSize: 13.5)),
-                      SizedBox(height: 3),
-                      Text(
-                        '专门的移动端模型，密集数字、小数点、表格更准',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(ctx, 'mlkit'),
-            child: Row(
-              children: [
-                Icon(
-                  settings.ocrEngine == 'mlkit'
-                      ? Icons.radio_button_checked
-                      : Icons.radio_button_unchecked,
-                  size: 18,
-                  color: const Color(0xFF3F6B4C),
-                ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('兼容模式（ML Kit）', style: TextStyle(fontSize: 13.5)),
-                      SizedBox(height: 3),
-                      Text(
-                        '老引擎。PP-OCR 起不来、或者某张图认得更差时切这里',
-                        style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-    if (picked == null) return;
-    await settings.setOcrEngine(picked);
-  }
-
   Future<void> _showDiagnostics() async {
     final text = await _collectDiagnostics();
     if (!mounted) return;

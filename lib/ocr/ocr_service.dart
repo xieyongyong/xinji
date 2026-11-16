@@ -14,31 +14,23 @@ export 'native_ocr.dart' show OcrText, OcrException;
 
 /// 图片相关的门面：识别 + 归档。
 ///
-/// ## 为什么这里几乎没有识别代码了
-/// v1.4 之前是把 ML Kit 跑在主进程的 Dart 侧。这条路在长截图上会崩，
-/// 而且崩的方式很刁钻：**native 段错误，Dart 层连异常都来不及抛**，
-/// 用户看到「导入图片瞬间闪退」，日志里只有半句话。
-///
-/// 现在识别整条链路（分块 + ML Kit + 去重）搬到了 Android 的 `:ocr` 独立进程
-/// （见 `OcrService.kt`），这里只负责转发和错误翻译。
+/// ## 为什么这里几乎没有识别代码
+/// 识别整条链路（分块 + 去水印 + PP-OCRv6 推理 + 重叠去重）都在 Android 的
+/// `:ocr` 独立进程里（见 `OcrService.kt`），这里只负责转发和错误翻译。
 /// 那边崩了，主 App 还活着，能弹「可手动填」。
 class OcrService {
   /// 识别一批图，按顺序返回每张图的结果。
   ///
   /// 一次把整批交给原生（一次绑定、一次回传），比逐张调用省一次进程往返，
-  /// 也避免每张图都重新唤醒识别器。
-  ///
-  /// [engine]：`ppocr`（默认，PP-OCRv6）/ `mlkit`（老引擎）。
+  /// 也避免每张图都重新唤醒引擎。
   Future<List<OcrText>> recognizeFiles(
     List<String> paths, {
     bool deWatermark = true,
-    String engine = 'ppocr',
   }) async {
     if (paths.isEmpty) return const <OcrText>[];
 
-    CrashLog.note('开始识别 ${paths.length} 张图（$engine）');
-    final result =
-        await NativeOcr.recognize(paths, deWatermark: deWatermark, engine: engine);
+    CrashLog.note('开始识别 ${paths.length} 张图');
+    final result = await NativeOcr.recognize(paths, deWatermark: deWatermark);
     if (result.length != paths.length) {
       throw OcrException(
         '识别结果和图片数量对不上（${result.length}/${paths.length}），请重试',

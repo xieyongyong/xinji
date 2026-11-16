@@ -8,8 +8,8 @@ import 'ocr_models.dart';
 
 /// 一张图的识别产物：带坐标的文本片段 + 整段纯文本。
 ///
-/// 名字**刻意**不叫 RecognizedText —— 那是 ML Kit 插件里的类型，
-/// 曾经因为同名把官方类型遮蔽掉，编译期报 "isn't a type"。
+/// 名字**刻意**不叫 RecognizedText —— 早期用 OCR 插件时，
+/// 同名类型会把插件里的官方类型遮蔽掉，编译期报 "isn't a type"。
 class OcrText {
   final List<RawLine> lines;
   final String fullText;
@@ -27,12 +27,12 @@ class OcrException implements Exception {
 /// 文字识别的 Dart 入口。
 ///
 /// ## 架构：识别在独立进程里跑
-/// 原生侧 `OcrService`（`:ocr` 进程）负责分块 + 调用 ML Kit；
+/// 原生侧 `OcrService`（`:ocr` 进程）负责分块 + 预处理 + PP-OCRv6 推理；
 /// 主进程只通过 `xinji/ocr` 通道收发一份 JSON。
 ///
-/// 这么拆是因为 ML Kit 的识别是纯 native 的，在部分设备上会直接段错误
-/// 或者被系统 OOM 杀掉 —— 那种崩溃 Dart 的 try/catch 根本抓不到，
-/// 用户看到的就是「导入图片瞬间闪退，日志一片空白」。
+/// 这么拆是因为推理是 native 的（ONNX Runtime），在内存紧张的设备上
+/// 死掉的时候 Dart 的 try/catch 根本抓不到 —— 用户看到的就是
+/// 「导入图片瞬间闪退，日志一片空白」。
 ///
 /// 隔离到独立进程后，那边崩了只是连接断开：这里收到一条普通错误，
 /// 界面提示「可以手动填」，图片已经存好了，不用重新截图。
@@ -55,13 +55,12 @@ class NativeOcr {
   /// [deWatermark] = false 时不刷浅灰水印：留给"这张图没有水印、
   /// 但阈值把某个浅色小字也刷掉了"的情况兜底（设置里可关）。
   ///
-  /// [engine]：`ppocr`（默认，PP-OCRv6）/ `mlkit`（老引擎，兜底用）。
+  /// 引擎只有 PP-OCRv6 一个，没有可切换的备用引擎。
   ///
   /// 失败抛 [OcrException]；原生进程崩溃也算失败，不会带走 App。
   static Future<List<OcrText>> recognize(
     List<String> paths, {
     bool deWatermark = true,
-    String engine = 'ppocr',
   }) async {
     if (paths.isEmpty) return const <OcrText>[];
     if (!available) {
@@ -73,7 +72,6 @@ class NativeOcr {
       raw = await _channel.invokeMethod<String>('recognize', {
         'paths': paths,
         'deWatermark': deWatermark,
-        'engine': engine,
       });
     } on MissingPluginException {
       throw OcrException('识别组件没装好，请重新安装 App');

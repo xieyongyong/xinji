@@ -40,5 +40,10 @@ class MainActivity : FlutterFragmentActivity() {
         MethodChannel(messenger, OcrBridge.CHANNEL).setMethodCallHandler { call, result ->
             OcrBridge.handle(call, result, applicationContext)
         }
+
+        // App 自身信息通道：读版本号（检查更新用）、打开下载链接
+        MethodChannel(messenger, AppChannel.NAME).setMethodCallHandler { call, result ->
+            AppChannel.handle(call, result, applicationContext)
+        }
     }
 }

@@ -34,7 +34,10 @@ android {
 
     defaultConfig {
         applicationId = "com.xinji.payslip"
-        // 23 是硬下限：local_auth（指纹/面容）从 API 23 才有 BiometricPrompt
+        // 23 是硬下限：local_auth（指纹/面容）从 API 23 才有 BiometricPrompt。
+        // 识别引擎换成 PP-OCR 之后**不需要再往上提**：
+        // onnxruntime-android 1.18 的 minSdk 就是 21，模型和推理都是我们自己写的，
+        // 没有依赖任何要求 API 29 的第三方 OCR 库。
         minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -65,7 +68,8 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
-            // 不开混淆：ML Kit 通过反射加载识别器，混淆后容易崩，包大一点换稳定
+            // 不开混淆：ONNX Runtime 的 JNI 按类名/方法名反射绑定，混淆后容易崩，
+            // 包大一点换稳定
             isMinifyEnabled = false
             isShrinkResources = false
         }
@@ -77,19 +81,16 @@ flutter {
 }
 
 // ---------------------------------------------------------------- 原生依赖
-// 文字识别不再走 Flutter 插件，而是由 OcrService 在 :ocr 进程里直接调。
+// 文字识别不走 Flutter 插件，由 OcrService 在 :ocr 进程里直接调。
 //
-// 主引擎是 PP-OCRv6（ONNX Runtime 跑 PP-OCRv6_small 的 det + rec 模型，
-// 模型和字典在 assets/ppocr/ 下，30MB 左右）：
+// 唯一的引擎是 PP-OCRv6（small）：ONNX Runtime 跑 det + rec 两个模型，
+// 模型和字典在 assets/ppocr/ 下（约 31MB）：
 //   · 对工资条这种"表格 + 密集数字"的图，小数点、千分位比 ML Kit 稳得多
-//   · 完全离线、不依赖 Google Play 服务
+//   · 完全离线，不依赖 Google Play 服务，国内机型也不用装 GMS
 //
-// ML Kit 保留着当兜底：设置里可以切回「兼容模式」。
-// 它本来就随包发布，多留一份不会让包变大，但能保证引擎出问题时你还有退路。
+// v1.9 起把 ML Kit 的两个依赖彻底删掉了（原先留作「兼容模式」兜底）：
+// 它认不准工资条上的数字，留着等于多一条出错路径、多 20MB 包体。
 dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
-
-    implementation("com.google.mlkit:text-recognition:16.0.1")
-    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }
 
