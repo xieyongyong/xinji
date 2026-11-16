@@ -132,6 +132,7 @@ class _ImportPageState extends State<ImportPage> {
         originals,
         keepPaths: paths,
         deWatermark: settings.deWatermark,
+        ocrEngine: settings.ocrEngine,
       );
     } catch (e) {
       failReason = e is OcrException ? e.message : '$e';

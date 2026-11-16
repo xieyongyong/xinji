@@ -27,11 +27,18 @@ class OcrService {
   ///
   /// 一次把整批交给原生（一次绑定、一次回传），比逐张调用省一次进程往返，
   /// 也避免每张图都重新唤醒识别器。
-  Future<List<OcrText>> recognizeFiles(List<String> paths, {bool deWatermark = true}) async {
+  ///
+  /// [engine]：`ppocr`（默认，PP-OCRv6）/ `mlkit`（老引擎）。
+  Future<List<OcrText>> recognizeFiles(
+    List<String> paths, {
+    bool deWatermark = true,
+    String engine = 'ppocr',
+  }) async {
     if (paths.isEmpty) return const <OcrText>[];
 
-    CrashLog.note('开始识别 ${paths.length} 张图');
-    final result = await NativeOcr.recognize(paths, deWatermark: deWatermark);
+    CrashLog.note('开始识别 ${paths.length} 张图（$engine）');
+    final result =
+        await NativeOcr.recognize(paths, deWatermark: deWatermark, engine: engine);
     if (result.length != paths.length) {
       throw OcrException(
         '识别结果和图片数量对不上（${result.length}/${paths.length}），请重试',

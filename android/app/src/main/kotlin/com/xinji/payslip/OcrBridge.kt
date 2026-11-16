@@ -46,6 +46,9 @@ object OcrBridge {
 
     /** 是否在识别前刷掉浅灰水印（Dart 设置里可关） */
     private var deWatermark: Boolean = true
+
+    /** 识别引擎（Dart 设置里可切） */
+    private var engine: String = OcrService.ENGINE_PPOCR
     private var appContext: Context? = null
 
     private val timeoutTask = Runnable {
@@ -80,6 +83,7 @@ object OcrBridge {
             msg.data = Bundle().apply {
                 putStringArrayList(OcrService.EXTRA_PATHS, paths)
                 putBoolean(OcrService.EXTRA_CLEAN, deWatermark)
+                putString(OcrService.EXTRA_ENGINE, engine)
             }
             msg.replyTo = reply
             try {
@@ -110,7 +114,9 @@ object OcrBridge {
                 }
                 // 缺省为 true：老版本 Dart 传参不带这个字段也不能把去水印关掉
                 val clean = call.argument<Boolean>("deWatermark") ?: true
-                recognize(context, list, clean, result)
+                // 缺省 PP-OCR：没传就按新引擎跑
+                val engineName = call.argument<String>("engine") ?: OcrService.ENGINE_PPOCR
+                recognize(context, list, clean, engineName, result)
             }
 
             else -> result.notImplemented()
@@ -121,6 +127,7 @@ object OcrBridge {
         context: Context,
         list: List<String>,
         clean: Boolean,
+        engineName: String,
         result: MethodChannel.Result
     ) {
         if (pending != null) {
@@ -130,6 +137,7 @@ object OcrBridge {
         pending = result
         paths = ArrayList(list)
         deWatermark = clean
+        engine = engineName
 
         val ctx = context.applicationContext
         appContext = ctx

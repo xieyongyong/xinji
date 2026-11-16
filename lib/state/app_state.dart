@@ -232,13 +232,18 @@ class AppState extends ChangeNotifier {
     List<String> filePaths, {
     List<String>? keepPaths,
     bool deWatermark = true,
+    String ocrEngine = 'ppocr',
   }) async {
     final parser = FieldParser(templates);
     final parsed = <ParsedImage>[];
 
     // 一次把整批交给原生（独立进程）。万一那边崩了，这里收到的是普通异常，
     // 不是"整个 App 消失"；图片早就在第 79 行存好了，用户可以直接手动填。
-    final recognized = await _recognizeAll(filePaths, deWatermark: deWatermark);
+    final recognized = await _recognizeAll(
+      filePaths,
+      deWatermark: deWatermark,
+      engine: ocrEngine,
+    );
 
     for (var i = 0; i < filePaths.length; i++) {
       final path = filePaths[i];
@@ -289,9 +294,13 @@ class AppState extends ChangeNotifier {
       ocr.importImage(source, fileNameHint: 'p$index', compress: compress);
 
   /// 识别一批图，把底层五花八门的异常统一成 [OcrException]
-  Future<List<OcrText>> _recognizeAll(List<String> paths, {bool deWatermark = true}) async {
+  Future<List<OcrText>> _recognizeAll(
+    List<String> paths, {
+    bool deWatermark = true,
+    String engine = 'ppocr',
+  }) async {
     try {
-      return await ocr.recognizeFiles(paths, deWatermark: deWatermark);
+      return await ocr.recognizeFiles(paths, deWatermark: deWatermark, engine: engine);
     } on OcrException {
       rethrow;
     } catch (e) {

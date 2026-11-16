@@ -39,6 +39,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 只打真机常见的两种 ARM 架构：ONNX Runtime 每个 ABI 的 so 都在 15MB 上下，
+        // 留 x86 只是让模拟器能跑，真机用不上，白占包体
+        ndk {
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+        }
     }
 
     signingConfigs {
@@ -71,14 +77,18 @@ flutter {
 }
 
 // ---------------------------------------------------------------- 原生依赖
-// 文字识别不再走 Flutter 插件，而是由 OcrService 在 :ocr 进程里直接调 ML Kit。
-// 这样做有两个好处：
-//   1. 能选到比插件更新的原生库版本（插件 0.13 绑的是 16.0.0）
-//   2. 不再把 japanese / korean / devanagari 三套模型打进 APK，包小一截
+// 文字识别不再走 Flutter 插件，而是由 OcrService 在 :ocr 进程里直接调。
 //
-// 只保留 latin（数字、英文、符号）和 chinese 两套 bundled 模型：
-// 都是**离线**的，不依赖 Google Play 服务，国产无 GMS 手机也能用。
+// 主引擎是 PP-OCRv6（ONNX Runtime 跑 PP-OCRv6_small 的 det + rec 模型，
+// 模型和字典在 assets/ppocr/ 下，30MB 左右）：
+//   · 对工资条这种"表格 + 密集数字"的图，小数点、千分位比 ML Kit 稳得多
+//   · 完全离线、不依赖 Google Play 服务
+//
+// ML Kit 保留着当兜底：设置里可以切回「兼容模式」。
+// 它本来就随包发布，多留一份不会让包变大，但能保证引擎出问题时你还有退路。
 dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
+
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
 }

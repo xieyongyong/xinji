@@ -4,10 +4,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
@@ -58,6 +58,12 @@ class OcrService : Service() {
         /** 是否在识别前刷掉浅灰水印 */
         const val EXTRA_CLEAN = "clean"
 
+        /** 用哪个引擎：ppocr（默认，PP-OCRv6） / mlkit（老引擎，留作兜底） */
+        const val EXTRA_ENGINE = "engine"
+
+        const val ENGINE_PPOCR = "ppocr"
+        const val ENGINE_MLKIT = "mlkit"
+
         /** 单块识别超时。正常一块 1~2 秒，60 秒已经非常宽松 */
         private const val TILE_TIMEOUT_SEC = 60L
 
@@ -70,6 +76,7 @@ class OcrService : Service() {
 
     private val worker = Executors.newSingleThreadExecutor()
     private var recognizer: TextRecognizer? = null
+    private var ppEngine: PpOcrEngine? = null
     private var selfTested = false
 
     private val handler = Handler(Looper.getMainLooper()) { msg ->
@@ -77,8 +84,9 @@ class OcrService : Service() {
             MSG_RECOGNIZE -> {
                 val paths = msg.data?.getStringArrayList(EXTRA_PATHS) ?: arrayListOf()
                 val clean = msg.data?.getBoolean(EXTRA_CLEAN, true) ?: true
+                val engine = msg.data?.getString(EXTRA_ENGINE) ?: ENGINE_PPOCR
                 val reply = msg.replyTo
-                worker.execute { runRecognition(paths, clean, reply) }
+                worker.execute { runRecognition(paths, clean, engine, reply) }
                 true
             }
 
@@ -93,7 +101,7 @@ class OcrService : Service() {
     override fun onCreate() {
         super.onCreate()
         trace("服务启动 pid=${android.os.Process.myPid()}")
-        ensureMlKit()
+        // ML Kit 的初始化改成用到时才做：默认走 PP-OCR，没必要为它付启动开销
     }
 
     /**
@@ -156,18 +164,27 @@ class OcrService : Service() {
             recognizer?.close()
         } catch (_: Throwable) {
         }
+        try {
+            ppEngine?.close()
+        } catch (_: Throwable) {
+        }
         worker.shutdownNow()
         super.onDestroy()
     }
 
     // ------------------------------------------------------------ 识别主流程
 
-    private fun runRecognition(paths: List<String>, clean: Boolean, reply: Messenger?) {
+    private fun runRecognition(
+        paths: List<String>,
+        clean: Boolean,
+        engineName: String,
+        reply: Messenger?
+    ) {
         val payload = try {
-            selfTest()
+            selfTest(engineName)
             val images = JSONArray()
             for ((i, path) in paths.withIndex()) {
-                images.put(recognizeImage(path, i, clean))
+                images.put(recognizeImage(path, i, clean, engineName))
             }
             JSONObject().put("ok", true).put("images", images).toString()
         } catch (t: Throwable) {
@@ -191,16 +208,16 @@ class OcrService : Service() {
      * 开机自检：拿一张 320×120 的合成小图先识别一次。
      *
      * 目的不是校验准确率，而是把两类故障分开：
-     * - 自检就崩 → ML Kit 在这台设备上根本跑不起来（模型/ABI/系统限制），
+     * - 自检就崩 → 这台设备上根本跑不起来（模型/ABI/内存限制），
      *   后续任何图都不可能成功，没必要让用户一张张试
      * - 自检过了、真实图崩 → 是图太大或内存问题，方向完全不同
      *
-     * 崩溃时进程直接没了，但 trace 里会留下「自检 识别开始」这行，
-     * 配合 last_exit.txt 的退出原因就能定性。
+     * 自检还会把识别出来的字写进日志：一旦出现「自检 通过「」「」」这种空结果，
+     * 就说明引擎能跑但输出是空的（模型对不上），比只报个崩溃好定位得多。
      */
-    private fun selfTest() {
+    private fun selfTest(engineName: String) {
         if (selfTested) return
-        trace("自检 识别开始")
+        trace("自检 引擎=$engineName 开始")
         val bmp = Bitmap.createBitmap(320, 120, Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bmp)
@@ -212,21 +229,60 @@ class OcrService : Service() {
             }
             canvas.drawText("薪迹 1234", 14f, 72f, paint)
 
-            val image = InputImage.fromBitmap(bmp, 0)
-            val result = Tasks.await(engine().process(image), 30, TimeUnit.SECONDS)
-            trace("自检 通过「${result.text.trim().take(24)}」")
+            val hits = if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ppEngine().recognize(bmp)
+            val text = hits.joinToString("") { it.text }.trim()
+            trace("自检 通过「${text.take(24)}」(${hits.size} 段)")
             selfTested = true
         } finally {
             bmp.recycle()
         }
     }
 
-    private fun recognizeImage(path: String, index: Int, clean: Boolean): JSONObject {
+    /** ML Kit 的识别结果，统一成 [PpOcrEngine.Hit] 方便上层一致处理 */
+    private fun mlKitHits(bmp: Bitmap): List<PpOcrEngine.Hit> {
+        val image = InputImage.fromBitmap(bmp, 0)
+        val result = Tasks.await(engine().process(image), TILE_TIMEOUT_SEC, TimeUnit.SECONDS)
+        val out = ArrayList<PpOcrEngine.Hit>()
+        for (block in result.textBlocks) {
+            for (line in block.lines) {
+                val t = line.text.trim()
+                if (t.isEmpty()) continue
+                val bb = line.boundingBox ?: continue
+                out.add(
+                    PpOcrEngine.Hit(
+                        text = t,
+                        left = bb.left.toFloat(),
+                        top = bb.top.toFloat(),
+                        right = bb.right.toFloat(),
+                        bottom = bb.bottom.toFloat(),
+                        score = 1f
+                    )
+                )
+            }
+        }
+        return out
+    }
+
+    private fun ppEngine(): PpOcrEngine {
+        ppEngine?.let { return it }
+        val created = PpOcrEngine(this) { line -> trace(line) }
+        created.ensureLoaded()
+        trace(created.loadInfo)
+        ppEngine = created
+        return created
+    }
+
+    private fun recognizeImage(
+        path: String,
+        index: Int,
+        clean: Boolean,
+        engineName: String
+    ): JSONObject {
         val dir = File(cacheDir, "ocrtiles")
         if (!dir.exists()) dir.mkdirs()
         val tag = "o${System.currentTimeMillis()}_$index"
 
-        trace("图$index 开始分块 ${File(path).name} clean=$clean")
+        trace("图$index 开始分块 ${File(path).name} clean=$clean 引擎=$engineName")
         val tiles = SlipImaging.tiles(
             path = path,
             tileHeight = TILE_HEIGHT,
@@ -256,47 +312,46 @@ class OcrService : Service() {
                     throw IllegalStateException("第 ${ti + 1} 块图片写盘失败")
                 }
 
-                // 这一行是排查 native 崩溃的关键线索：
-                // 日志停在这里，就说明 ML Kit 处理 ${w}x${h} 的图时挂了
+                // 这一行是排查崩溃的关键线索：日志停在这里，就说明识别 ${w}x${h} 时挂了
                 // 后面的「去灰」是水印清理结果，识别不准时先看这个数
                 val cleanInfo = tile["clean"] as? String ?: "-"
                 trace("图$index 块$ti ${w}x$h 识别开始 去灰=$cleanInfo")
 
-                val image = InputImage.fromFilePath(this, Uri.fromFile(f))
-                val result = Tasks.await(
-                    engine().process(image),
-                    TILE_TIMEOUT_SEC,
-                    TimeUnit.SECONDS
-                )
-                trace("图$index 块$ti 识别完成 ${result.textBlocks.size} 段")
+                val bmp = BitmapFactory.decodeFile(tilePath)
+                    ?: throw IllegalStateException("第 ${ti + 1} 块图片解码失败")
+                val started = System.currentTimeMillis()
+                val hits: List<PpOcrEngine.Hit> = try {
+                    if (engineName == ENGINE_MLKIT) mlKitHits(bmp) else ppEngine().recognize(bmp)
+                } finally {
+                    // 一块 1600x1400 的位图就是 9MB，用完立刻放
+                    bmp.recycle()
+                }
+                trace("图$index 块$ti 识别完成 ${hits.size} 段 ${System.currentTimeMillis() - started}ms")
 
-                text.append(result.text).append('\n')
-                for (block in result.textBlocks) {
-                    for (line in block.lines) {
-                        val t = line.text.trim()
-                        if (t.isEmpty()) continue
-                        val bb = line.boundingBox ?: continue
-                        val y = bb.top + top
-                        var duplicate = false
-                        for (p in recent) {
-                            if (p.first == t && abs(p.second - y) < 40) {
-                                duplicate = true
-                                break
-                            }
+                for (hit in hits) {
+                    val t = hit.text.trim()
+                    if (t.isEmpty()) continue
+                    val y = hit.top.toInt() + top
+                    var duplicate = false
+                    for (p in recent) {
+                        if (p.first == t && abs(p.second - y) < 40) {
+                            duplicate = true
+                            break
                         }
-                        if (duplicate) continue
-                        recent.add(t to y)
-                        if (recent.size > 60) recent.removeAt(0)
-
-                        lines.put(
-                            JSONArray()
-                                .put(t)
-                                .put(bb.left)
-                                .put(y)
-                                .put(bb.right)
-                                .put(bb.bottom + top)
-                        )
                     }
+                    if (duplicate) continue
+                    recent.add(t to y)
+                    if (recent.size > 60) recent.removeAt(0)
+
+                    text.append(t).append(' ')
+                    lines.put(
+                        JSONArray()
+                            .put(t)
+                            .put(hit.left.toInt())
+                            .put(y)
+                            .put(hit.right.toInt())
+                            .put(hit.bottom.toInt() + top)
+                    )
                 }
             }
         } finally {
@@ -314,6 +369,8 @@ class OcrService : Service() {
 
     private fun engine(): TextRecognizer {
         recognizer?.let { return it }
+        // ML Kit 在独立进程里不会自动初始化，第一次用之前必须补上
+        ensureMlKit()
         val created = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
         recognizer = created
         return created
@@ -326,6 +383,15 @@ class OcrService : Service() {
             msg.contains("timeout", true) -> "识别超时，这张图可能太长了"
             msg.contains("not been initialized", true) -> "识别引擎初始化失败"
             msg.contains("download", true) -> "识别模型不可用（本机不支持离线中文识别）"
+            msg.contains("UnsatisfiedLink", true) ||
+                msg.contains("NoSuchMethod", true) ||
+                msg.contains("NoClassDefFound", true) ||
+                msg.contains("loadLibrary", true) ->
+                "识别引擎在这台机器上装不起来，可在设置里换回「兼容模式」"
+            msg.contains("onnx", true) || msg.contains("模型", true) ->
+                "PP-OCR 模型加载失败：$msg"
+            msg.contains("out of memory", true) || msg.contains("OOM", true) ->
+                "内存不足，这张图太长，可以裁成两张再导入"
             else -> msg
         }
     }

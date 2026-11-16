@@ -55,10 +55,13 @@ class NativeOcr {
   /// [deWatermark] = false 时不刷浅灰水印：留给"这张图没有水印、
   /// 但阈值把某个浅色小字也刷掉了"的情况兜底（设置里可关）。
   ///
+  /// [engine]：`ppocr`（默认，PP-OCRv6）/ `mlkit`（老引擎，兜底用）。
+  ///
   /// 失败抛 [OcrException]；原生进程崩溃也算失败，不会带走 App。
   static Future<List<OcrText>> recognize(
     List<String> paths, {
     bool deWatermark = true,
+    String engine = 'ppocr',
   }) async {
     if (paths.isEmpty) return const <OcrText>[];
     if (!available) {
@@ -70,6 +73,7 @@ class NativeOcr {
       raw = await _channel.invokeMethod<String>('recognize', {
         'paths': paths,
         'deWatermark': deWatermark,
+        'engine': engine,
       });
     } on MissingPluginException {
       throw OcrException('识别组件没装好，请重新安装 App');

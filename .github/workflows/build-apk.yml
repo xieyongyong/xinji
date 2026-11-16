@@ -78,10 +78,22 @@ jobs:
         run: flutter test
         continue-on-error: true
 
+      - name: 读取版本号
+        id: ver
+        run: |
+          # 版本以 pubspec.yaml 为准，不再用 1.0.<run_number> 覆盖：
+          # 那样所有包都叫 1.0.x，既看不出是哪个版本，也没法在 Release 里区分。
+          V=$(grep -m1 '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1 | tr -d '[:space:]')
+          echo "VERSION=$V" >> $GITHUB_ENV
+          echo "name=$V" >> $GITHUB_OUTPUT
+          echo "本次版本：$V"
+
       - name: 编译 Release APK
         run: |
           echo "BUILD_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M')" >> $GITHUB_ENV
-          flutter build apk --release --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
+          # versionName 用 pubspec 里的版本（1.8.0），versionCode 用 run_number：
+          # versionCode 必须单调递增，否则装不上新包。
+          flutter build apk --release --build-number=${{ github.run_number }} --build-name=$VERSION
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/xinji.apk
           ls -lh dist/
@@ -93,24 +105,52 @@ jobs:
           path: dist/xinji.apk
           retention-days: 30
 
-      - name: 发布到 Release（手机可直接下载）
+      - name: 发布本版本（永久保留，可回退下载）
         uses: softprops/action-gh-release@v2
         with:
-          # 固定用 latest 这个 tag，于是下载地址永远不变：
-          # https://github.com/<用户名>/<仓库名>/releases/latest/download/xinji.apk
+          # 每个版本一个独立 tag，比如 v1.8.0。
+          # 这样新版本出问题时，旧版本的安装包还在，能直接下回来装，
+          # 不会被下一次构建覆盖掉。
+          tag_name: v${{ env.VERSION }}
+          name: 薪迹 v${{ env.VERSION }}
+          body: |
+            **版本 ${{ env.VERSION }}**（第 ${{ github.run_number }} 次构建）
+
+            手机直接下载：
+            https://github.com/${{ github.repository }}/releases/download/v${{ env.VERSION }}/xinji.apk
+
+            一直是最新版：
+            https://github.com/${{ github.repository }}/releases/latest/download/xinji.apk
+
+            提交：${{ github.sha }}
+            时间：${{ env.BUILD_TIME }}
+
+            > 这个包会一直留着。回退时先「设置 → 备份与恢复」导出备份，
+            > 再卸载装旧版本（Android 不允许版本号倒退覆盖安装）。
+          files: dist/xinji.apk
+          overwrite_files: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 更新 latest 快捷链接
+        uses: softprops/action-gh-release@v2
+        with:
+          # tag 名固定叫 latest，于是 releases/download/latest/xinji.apk 永远可用。
+          # 真正的版本归档在上面那个 step，这里只是一张"门牌"。
           tag_name: latest
           name: 薪迹 · 最新安装包
           body: |
-            自动构建，第 ${{ github.run_number }} 次。
+            自动指向最新构建（当前版本 ${{ env.VERSION }}）。
 
-            **手机直接下载这个链接（不用登录）：**
-            https://github.com/${{ github.repository }}/releases/latest/download/xinji.apk
+            历史版本都在右侧 Releases 里，按 v1.x.x 命名。
 
-            版本：1.0.${{ github.run_number }}
+            版本：${{ env.VERSION }}
             提交：${{ github.sha }}
             时间：${{ env.BUILD_TIME }}
           files: dist/xinji.apk
           overwrite_files: true
-          make_latest: true
+          make_latest: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

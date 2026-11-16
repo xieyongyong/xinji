@@ -402,6 +402,21 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 18),
               _sectionTitle('图片与识别'),
               _card([
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  leading: const Icon(Icons.text_fields, size: 20, color: Color(0xFF4A4F4A)),
+                  title: const Text('识别引擎', style: TextStyle(fontSize: 14)),
+                  subtitle: Text(
+                    settings.ocrEngine == 'mlkit'
+                        ? '兼容模式（ML Kit）。识别不稳、或 PP-OCR 在这台机器上起不来时用这个。'
+                        : 'PP-OCRv6。密集数字、小数点、表格比老引擎准，完全离线。',
+                    style: const TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right, size: 18, color: Color(0xFFB9BEB9)),
+                  onTap: () => _pickEngine(settings),
+                ),
+                const Divider(height: 1),
                 SwitchListTile(
                   value: settings.compressImages,
                   onChanged: (v) => settings.setCompressImages(v),
@@ -621,6 +636,80 @@ class _SettingsPageState extends State<SettingsPage> {
   ///    看「进程=…:ocr」就知道崩的是识别进程还是主进程。
   /// 2. `ocr_trace.log` —— 识别进程写的一行行面包屑，最后一行就是崩在哪一步。
   /// 3. `crash.log` —— Dart 层能抓到的异常。
+  /// 切换识别引擎。
+  ///
+  /// 做成弹窗而不是下拉，是因为这两个选项的差别需要解释：
+  /// PP-OCR 更准但依赖 ONNX Runtime；ML Kit 是原来那套，慢一点、数字容易糊，
+  /// 但在任何机型上都起得来。这就是引擎级的"逃生门"。
+  Future<void> _pickEngine(AppSettings settings) async {
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('识别引擎', style: TextStyle(fontSize: 15)),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'ppocr'),
+            child: Row(
+              children: [
+                Icon(
+                  settings.ocrEngine == 'ppocr'
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: const Color(0xFF3F6B4C),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('PP-OCRv6（推荐）', style: TextStyle(fontSize: 13.5)),
+                      SizedBox(height: 3),
+                      Text(
+                        '专门的移动端模型，密集数字、小数点、表格更准',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(ctx, 'mlkit'),
+            child: Row(
+              children: [
+                Icon(
+                  settings.ocrEngine == 'mlkit'
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 18,
+                  color: const Color(0xFF3F6B4C),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('兼容模式（ML Kit）', style: TextStyle(fontSize: 13.5)),
+                      SizedBox(height: 3),
+                      Text(
+                        '老引擎。PP-OCR 起不来、或者某张图认得更差时切这里',
+                        style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await settings.setOcrEngine(picked);
+  }
+
   Future<void> _showDiagnostics() async {
     final text = await _collectDiagnostics();
     if (!mounted) return;
