@@ -8,6 +8,7 @@ import io.github.hzkitty.entity.ParamConfig
 import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.Mat
+import org.opencv.core.MatOfDouble
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import java.io.File
@@ -63,10 +64,10 @@ class RapidOcrEngine(
         log("RapidOCR 引擎初始化开始")
 
         // 1) 把 v6_small 模型和字典从 assets 落到 cache（平铺文件名）
-        val det = copyAsset("ppocr/det.onnx", "xinji_ppocrv6_det.onnx")
-        val rec = copyAsset("ppocr/rec.onnx", "xinji_ppocrv6_rec.onnx")
-        val dict = copyAsset("ppocr/dict.txt", "xinji_ppocrv6_dict.txt")
-        log("模型就位 det=${det.length() / 1024}KB rec=${rec.length() / 1024}KB dict=${dict.length()}B")
+        val detFile = copyAsset("ppocr/det.onnx", "xinji_ppocrv6_det.onnx")
+        val recFile = copyAsset("ppocr/rec.onnx", "xinji_ppocrv6_rec.onnx")
+        val dictFile = copyAsset("ppocr/dict.txt", "xinji_ppocrv6_dict.txt")
+        log("模型就位 det=${detFile.length() / 1024}KB rec=${recFile.length() / 1024}KB dict=${dictFile.length()}B")
 
         val cfg = OcrConfig().apply {
             global.apply {
@@ -77,7 +78,7 @@ class RapidOcrEngine(
                 interOpNumThreads = 2
             }
             det.apply {
-                modelPath = det.name
+                modelPath = detFile.name
                 limitType = "max"        // 和前面本地验证过的算法一致：长边 <=1280
                 limitSideLen = 1280
                 thresh = 0.2f
@@ -86,8 +87,8 @@ class RapidOcrEngine(
                 useArena = false         // arena 常驻不释放，OCR 进程容易被 OOM
             }
             rec.apply {
-                modelPath = rec.name
-                recKeysPath = dict.absolutePath
+                modelPath = recFile.name
+                recKeysPath = dictFile.absolutePath
                 recImgShape = intArrayOf(3, 48, 320)
                 useArena = false
                 intraOpNumThreads = 2
@@ -158,10 +159,10 @@ class RapidOcrEngine(
             val code = if (src.channels() == 4) Imgproc.COLOR_RGBA2GRAY else Imgproc.COLOR_BGR2GRAY
             Imgproc.cvtColor(src, gray, code)
 
-            val mean = Mat()
-            val std = Mat()
+            val mean = MatOfDouble()
+            val std = MatOfDouble()
             Core.meanStdDev(gray, mean, std)
-            val contrast = if (std.height() > 0 && std.cols() > 0) std[0, 0][0] else 0.0
+            val contrast = std.toArray().firstOrNull() ?: 0.0
 
             val boosted = Mat()
             if (contrast < 55.0) {
