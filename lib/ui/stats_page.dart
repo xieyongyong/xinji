@@ -271,7 +271,7 @@ class _StatsPageState extends State<StatsPage> {
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 60),
           child: Column(
-            children: const [
+            children: [
               Icon(Icons.insights_outlined, size: 40, color: kTextFaint),
               SizedBox(height: 12),
               Text('这个范围还没有数据',
@@ -357,7 +357,7 @@ class _StatsPageState extends State<StatsPage> {
                               minHeight: 8,
                               backgroundColor: kBorder,
                               valueColor:
-                                  const AlwaysStoppedAnimation<Color>(kSeed),
+                                  AlwaysStoppedAnimation<Color>(kSeed),
                             ),
                           ),
                         ),

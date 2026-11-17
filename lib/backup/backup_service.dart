@@ -158,7 +158,7 @@ class BackupService {
 
   /// 从字节恢复（云盘下载后用）。会**清空现有数据**。
   Future<BackupImportResult> restoreBytes(List<int> rawBytes, {String? password}) async {
-    var bytes = rawBytes;
+    Uint8List bytes = Uint8List.fromList(rawBytes);
     bool wasEncrypted = false;
 
     if (bytes.length > 4 && utf8.decode(bytes.sublist(0, 4), allowMalformed: true) == _magic) {

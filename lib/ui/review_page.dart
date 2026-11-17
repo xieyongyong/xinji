@@ -1244,7 +1244,7 @@ class _ReviewPageState extends State<ReviewPage> {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
               child: Row(
-                children: const [
+                children: [
                   Icon(Icons.add_circle_outline, size: 16, color: kTextMedium),
                   SizedBox(width: 6),
                   Text('添加信息项', style: TextStyle(fontSize: 13, color: kTextMedium)),

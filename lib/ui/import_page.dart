@@ -377,7 +377,7 @@ class _ImportPageState extends State<ImportPage> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: const [
+        children: [
           Text('截图小技巧',
               style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: kSeed)),
           SizedBox(height: 6),
