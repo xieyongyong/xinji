@@ -201,7 +201,7 @@ class _ImportPageState extends State<ImportPage> {
           ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
             children: [
-              const Text('记录类型', style: TextStyle(fontSize: 13, color: Color(0xFF8A8F8A))),
+              Text('记录类型', style: TextStyle(fontSize: 13, color: kTextSecondary)),
               const SizedBox(height: 8),
               SegmentedButton<String>(
                 segments: const [
@@ -267,7 +267,7 @@ class _ImportPageState extends State<ImportPage> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: kSurface,
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: Column(
@@ -281,8 +281,8 @@ class _ImportPageState extends State<ImportPage> {
                     const SizedBox(height: 16),
                     Text(_busyText, style: const TextStyle(fontSize: 13.5)),
                     const SizedBox(height: 4),
-                    const Text('全程离线处理，图片不会上传',
-                        style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+                    Text('全程离线处理，图片不会上传',
+                        style: TextStyle(fontSize: 11.5, color: kTextHint)),
                   ],
                 ),
               ),
@@ -306,20 +306,20 @@ class _ImportPageState extends State<ImportPage> {
         decoration: cardDecoration(),
         child: Row(
           children: [
-            const Icon(Icons.event_note_outlined, size: 20, color: kSeed),
+            Icon(Icons.event_note_outlined, size: 20, color: kSeed),
             const SizedBox(width: 12),
             const Text('这笔工资属于', style: TextStyle(fontSize: 13.5)),
             const Spacer(),
             Text(
               '$_year 年 $_month 月',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF1B1C1B),
+                color: kTextPrimary,
               ),
             ),
             const SizedBox(width: 4),
-            const Icon(Icons.chevron_right, color: Color(0xFFC4C9C4)),
+            Icon(Icons.chevron_right, color: kTextFaint),
           ],
         ),
       ),
@@ -357,11 +357,11 @@ class _ImportPageState extends State<ImportPage> {
                   Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 3),
                   Text(subtitle,
-                      style: const TextStyle(fontSize: 12, color: Color(0xFF8A8F8A), height: 1.4)),
+                      style: TextStyle(fontSize: 12, color: kTextSecondary, height: 1.4)),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, color: Color(0xFFC4C9C4)),
+            Icon(Icons.chevron_right, color: kTextFaint),
           ],
         ),
       ),
@@ -385,7 +385,7 @@ class _ImportPageState extends State<ImportPage> {
             '· 明细太长就分几张截，相邻两张留一两行重叠，合并最准\n'
             '· 尽量按区块切（收入一块、扣款一块），别从一行金额中间切开\n'
             '· 识别结果会预填到表单，请扫一眼再保存',
-            style: TextStyle(fontSize: 12, height: 1.7, color: Color(0xFF3D5A54)),
+            style: TextStyle(fontSize: 12, height: 1.7, color: kInfoText),
           ),
         ],
       ),

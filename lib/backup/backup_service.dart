@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 /// 备份/恢复过程中的可读错误
@@ -45,6 +46,21 @@ class BackupService {
   static const int _saltLen = 16;
   static const int _ivLen = 16;
 
+  /// 随备份带走的用户偏好（bool/int）。刻意不含应用锁 PIN、生物识别、
+  /// 上次检查更新/跳过版本/上次备份时间——这些是安全凭证或临时状态。
+  static const _prefBoolKeys = [
+    'perf_auto',
+    'compress_images',
+    'de_watermark',
+  ];
+  static const _prefIntKeys = [
+    'color_up',
+    'color_down',
+    'theme_seed_index',
+    'theme_mode',
+    'current_employer_id',
+  ];
+
   // ------------------------------------------------------------ 导出
 
   /// 生成备份文件，返回文件绝对路径
@@ -67,6 +83,24 @@ class BackupService {
         '${now.hour.toString().padLeft(2, '0')}'
         '${now.minute.toString().padLeft(2, '0')}';
 
+    final outBytes = await buildBytes(encrypted: encrypted, password: password);
+    final outPath = p.join(
+      backupDir.path,
+      encrypted ? 'xinji_$stamp.xbk' : 'xinji_$stamp.zip',
+    );
+    await File(outPath).writeAsBytes(outBytes);
+    return outPath;
+  }
+
+  /// 生成备份字节（不落地），供本地导出和云盘上传共用。
+  Future<List<int>> buildBytes({
+    required bool encrypted,
+    String? password,
+  }) async {
+    if (encrypted && (password == null || password.length < 4)) {
+      throw BackupException('加密备份的密码至少 4 位');
+    }
+
     final archive = Archive();
 
     // 1) 数据 JSON
@@ -87,26 +121,17 @@ class BackupService {
     // 3) CSV（方便直接用 Excel 看）
     final csvItems = _buildItemsCsv(data);
     final csvSummary = _buildSummaryCsv(data);
-    archive.addFile(ArchiveFile('明细.csv', utf8.encode(csvItems).length, utf8.encode(csvItems)));
+    final csvItemsBytes = utf8.encode(csvItems);
+    final csvSummaryBytes = utf8.encode(csvSummary);
+    archive.addFile(ArchiveFile('明细.csv', csvItemsBytes.length, csvItemsBytes));
     archive.addFile(
-        ArchiveFile('月度汇总.csv', utf8.encode(csvSummary).length, utf8.encode(csvSummary)));
+        ArchiveFile('月度汇总.csv', csvSummaryBytes.length, csvSummaryBytes));
 
     final zipBytes = ZipEncoder().encode(archive);
     if (zipBytes == null) throw BackupException('打包失败，请重试');
 
-    String outPath;
-    List<int> outBytes;
-
-    if (encrypted) {
-      outBytes = _encrypt(Uint8List.fromList(zipBytes), password!);
-      outPath = p.join(backupDir.path, 'xinji_$stamp.xbk');
-    } else {
-      outBytes = zipBytes;
-      outPath = p.join(backupDir.path, 'xinji_$stamp.zip');
-    }
-
-    await File(outPath).writeAsBytes(outBytes);
-    return outPath;
+    if (encrypted) return _encrypt(Uint8List.fromList(zipBytes), password!);
+    return zipBytes;
   }
 
   // ------------------------------------------------------------ 导入
@@ -124,12 +149,16 @@ class BackupService {
     }
   }
 
-  /// 恢复备份。会**清空现有数据**，调用方必须先跟用户确认。
+  /// 从文件恢复备份。会**清空现有数据**，调用方必须先跟用户确认。
   Future<BackupImportResult> importFromFile(String path, {String? password}) async {
     final f = File(path);
     if (!await f.exists()) throw BackupException('找不到备份文件');
+    return restoreBytes(await f.readAsBytes(), password: password);
+  }
 
-    var bytes = await f.readAsBytes();
+  /// 从字节恢复（云盘下载后用）。会**清空现有数据**。
+  Future<BackupImportResult> restoreBytes(List<int> rawBytes, {String? password}) async {
+    var bytes = rawBytes;
     bool wasEncrypted = false;
 
     if (bytes.length > 4 && utf8.decode(bytes.sublist(0, 4), allowMalformed: true) == _magic) {
@@ -275,19 +304,24 @@ class BackupService {
           }));
         }
 
-        // 老备份里的模板没有归属：挂到第一家雇主，
-        // 否则按雇主取模板会全部落空，录入页突然不预填
+        // 老备份里的模板：employer_id 为 NULL，或指向已被重建的旧雇主 id
+        // （恢复时 employer 表按备份重建/补了"我的公司"，旧 id 已不存在），
+        // 都要挂到第一家，否则按雇主取模板全部落空，录入页突然不预填。
         final firstEmp = await txn.query('employer',
             columns: ['id'], orderBy: 'id ASC', limit: 1);
         if (firstEmp.isNotEmpty) {
+          final firstId = firstEmp.first['id'];
           await txn.update(
             'salary_template',
-            {'employer_id': firstEmp.first['id']},
-            where: 'employer_id IS NULL',
+            {'employer_id': firstId},
+            where: 'employer_id IS NULL OR employer_id NOT IN (SELECT id FROM employer)',
           );
         }
       }
     });
+
+    // 恢复用户偏好（老备份没有 prefs 节点，跳过即可）
+    await _restorePrefs(data['prefs']);
 
     return BackupImportResult(
       recordCount: records.length,
@@ -295,6 +329,21 @@ class BackupService {
       imageCount: images.length,
       wasEncrypted: wasEncrypted,
     );
+  }
+
+  /// 把备份里的偏好写回 SharedPreferences。只认白名单 key 且类型匹配，
+  /// 避免坏备份把设置写成乱七八糟的值。
+  Future<void> _restorePrefs(dynamic raw) async {
+    if (raw is! Map) return;
+    final sp = await SharedPreferences.getInstance();
+    for (final k in _prefBoolKeys) {
+      final v = raw[k];
+      if (v is bool) await sp.setBool(k, v);
+    }
+    for (final k in _prefIntKeys) {
+      final v = raw[k];
+      if (v is int) await sp.setInt(k, v);
+    }
   }
 
   /// 只保留白名单里的字段，避免备份文件里多了列导致插入失败
@@ -320,6 +369,9 @@ class BackupService {
     final salaryTemplates = await db.query('salary_template');
     final templateFields = await db.query('template_field');
     final employers = await db.query('employer');
+
+    // 用户偏好快照（换机恢复后设置原样保留）
+    final prefs = await _collectPrefs();
 
     final images = <Map<String, dynamic>>[];
     for (final row in imageRows) {
@@ -347,7 +399,23 @@ class BackupService {
       'template_fields':
           templateFields.map((e) => Map<String, dynamic>.from(e)).toList(),
       'employers': employers.map((e) => Map<String, dynamic>.from(e)).toList(),
+      'prefs': prefs,
     };
+  }
+
+  /// 读取要随备份带走的偏好。没设过的 key 不写，恢复时保持默认值。
+  Future<Map<String, dynamic>> _collectPrefs() async {
+    final sp = await SharedPreferences.getInstance();
+    final out = <String, dynamic>{};
+    for (final k in _prefBoolKeys) {
+      final v = sp.getBool(k);
+      if (v != null) out[k] = v;
+    }
+    for (final k in _prefIntKeys) {
+      final v = sp.getInt(k);
+      if (v != null) out[k] = v;
+    }
+    return out;
   }
 
   // ------------------------------------------------------------ CSV

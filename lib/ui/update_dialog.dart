@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/app_update.dart';
+import 'theme.dart';
 
 /// 发现新版本时的弹窗。
 ///
@@ -24,7 +25,7 @@ Future<bool> showUpdateDialog(
     builder: (ctx) => AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.system_update_alt, size: 20, color: Color(0xFF3F6B4C)),
+          Icon(Icons.system_update_alt, size: 20, color: kIncomeFg),
           const SizedBox(width: 8),
           Expanded(
             child: Text('发现新版本 ${release.version}',
@@ -42,7 +43,7 @@ Future<bool> showUpdateDialog(
               Text(
                 '当前 $currentVersion  →  最新 ${release.version}'
                 '${release.dateLabel.isEmpty ? '' : '（${release.dateLabel}）'}',
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A)),
+                style: TextStyle(fontSize: 12.5, color: kTextSecondary),
               ),
               if (release.notes.isNotEmpty) ...[
                 const SizedBox(height: 12),
@@ -50,7 +51,7 @@ Future<bool> showUpdateDialog(
                   width: double.infinity,
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF4F6F4),
+                    color: kSurfaceAlt,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -60,10 +61,10 @@ Future<bool> showUpdateDialog(
                 ),
               ],
               const SizedBox(height: 12),
-              const Text(
+              Text(
                 '点「立即更新」后会在后台下载，期间可以照常使用 App；'
                 '下载完在首页点一下即可安装，数据原样保留。',
-                style: TextStyle(fontSize: 11.5, height: 1.6, color: Color(0xFF9AA09A)),
+                style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
               ),
             ],
           ),

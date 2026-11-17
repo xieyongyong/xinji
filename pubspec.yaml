@@ -1,7 +1,7 @@
 name: xinji
 description: 薪迹 · 本地工资条记录、归档与对比
 publish_to: 'none'
-version: 2.1.0+12
+version: 2.2.0+13
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -20,12 +20,12 @@ dependencies:
   provider: ^6.1.2
   shared_preferences: ^2.3.2
 
-  # 离线 OCR：PP-OCRv6(small) + ONNX Runtime
+  # 离线 OCR：RapidOCR + PP-OCRv6(small) + OpenCV 预处理
   # 这里【故意】没有任何 OCR 插件依赖：
   #   · 插件会把 native 库拽进主进程，一旦崩了整个 App 就闪退；
   #   · v1.9 起连 ML Kit 也删干净了（认不准工资条数字）。
-  #   推理代码在 android/app/.../PpOcrEngine.kt，跑在 :ocr 独立进程，
-  #   原生依赖只有 android/app/build.gradle.kts 里的 onnxruntime-android。
+  #   推理代码在 android/app/.../RapidOcrEngine.kt，跑在 :ocr 独立进程，
+  #   原生依赖在 android/app/build.gradle.kts：rapidocr4j-android + opencv + onnxruntime-android。
 
   # 图片
   image_picker: ^1.1.2

@@ -19,7 +19,6 @@ import 'settings_page.dart';
 import 'theme.dart';
 import 'stats_page.dart';
 import 'update_dialog.dart';
-import 'widgets/update_progress_strip.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -143,9 +142,7 @@ class _HomePageState extends State<HomePage> {
       ),
       body: Column(
         children: [
-          // 后台下载更新时只占 3px；完成后变一条"点此安装"。
-          // 不弹窗、不跳转，用户继续查数据不受影响。
-          const UpdateProgressStrip(),
+          // 下载进度条已改成全局浮层（见 main.dart），切到任何页面都可见。
           if (state.employers.length > 1) _employerBar(state),
           _yearBar(years, year),
           _summaryStrip(summary),
@@ -192,9 +189,9 @@ class _HomePageState extends State<HomePage> {
           if (i == state.employers.length) {
             return GestureDetector(
               onTap: () => _open(const EmployerPage()),
-              child: const Padding(
+              child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 2),
-                child: Icon(Icons.tune, size: 18, color: Color(0xFF9AA09A)),
+                child: Icon(Icons.tune, size: 18, color: kTextHint),
               ),
             );
           }
@@ -205,7 +202,7 @@ class _HomePageState extends State<HomePage> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
               decoration: BoxDecoration(
-                color: selected ? kSeed : const Color(0xFFF2F4F2),
+                color: selected ? kSeed : kSurfaceAlt,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Center(
@@ -213,7 +210,7 @@ class _HomePageState extends State<HomePage> {
                   e.name,
                   style: TextStyle(
                     fontSize: 12.5,
-                    color: selected ? Colors.white : const Color(0xFF5A5F5A),
+                    color: selected ? Colors.white : kTextMedium,
                     fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
@@ -311,12 +308,12 @@ class _HomePageState extends State<HomePage> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.error_outline, size: 17, color: Color(0xFF9A6B00)),
+          Icon(Icons.error_outline, size: 17, color: kWarnIcon),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               '$month 月还没录入。工资条一般一周就失效，记得及时截图导入。',
-              style: const TextStyle(fontSize: 12.5, color: Color(0xFF6B4E00), height: 1.45),
+              style: TextStyle(fontSize: 12.5, color: kWarnText, height: 1.45),
             ),
           ),
         ],
@@ -337,18 +334,18 @@ class _HomePageState extends State<HomePage> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFE6E8E6), style: BorderStyle.solid),
+              border: Border.all(color: kDivider, style: BorderStyle.solid),
             ),
             child: Row(
               children: [
                 SizedBox(
                   width: 44,
                   child: Text('${m.month}月',
-                      style: const TextStyle(fontSize: 15, color: Color(0xFFB0B5B0))),
+                      style: TextStyle(fontSize: 15, color: kTextHint)),
                 ),
-                const Text('未录入', style: TextStyle(fontSize: 13, color: Color(0xFFB0B5B0))),
+                Text('未录入', style: TextStyle(fontSize: 13, color: kTextHint)),
                 const Spacer(),
-                const Icon(Icons.add, size: 18, color: Color(0xFFB0B5B0)),
+                Icon(Icons.add, size: 18, color: kTextHint),
               ],
             ),
           ),
@@ -385,7 +382,7 @@ class _HomePageState extends State<HomePage> {
                         borderRadius: BorderRadius.circular(4),
                       ),
                       child: Text('${m.monthly.length}笔',
-                          style: const TextStyle(fontSize: 10.5, color: kSeed)),
+                          style: TextStyle(fontSize: 10.5, color: kSeed)),
                     ),
                   ],
                   const Spacer(),
@@ -413,7 +410,7 @@ class _HomePageState extends State<HomePage> {
   Widget _deltaChip(int delta) {
     final up = delta > 0;
     final color = delta == 0
-        ? const Color(0xFF9AA09A)
+        ? kTextHint
         : context.watch<AppSettings>().diffColor(delta);
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -438,7 +435,7 @@ class _HomePageState extends State<HomePage> {
               width: 3,
               height: 15,
               decoration: BoxDecoration(
-                color: isExtra ? const Color(0xFFB45309) : kSeed,
+                color: isExtra ? kDeductionFg : kSeed,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
@@ -448,7 +445,7 @@ class _HomePageState extends State<HomePage> {
                 isExtra ? (r.recordLabel ?? '其他收入') : '工资明细',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 13.5, color: Color(0xFF4A4F4A)),
+                style: TextStyle(fontSize: 13.5, color: kTextBody),
               ),
             ),
             if (isExtra) ...[
@@ -456,11 +453,11 @@ class _HomePageState extends State<HomePage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFFDF1E7),
+                  color: kExtraBg,
                   borderRadius: BorderRadius.circular(4),
                 ),
-                child: const Text('额外',
-                    style: TextStyle(fontSize: 10, color: Color(0xFFB45309))),
+                child: Text('额外',
+                    style: TextStyle(fontSize: 10, color: kDeductionFg)),
               ),
             ],
             const SizedBox(width: 10),
@@ -468,12 +465,12 @@ class _HomePageState extends State<HomePage> {
               formatCents(r.netCents),
               style: TextStyle(
                 fontSize: 13.5,
-                color: const Color(0xFF1B1C1B),
+                color: kTextPrimary,
                 fontWeight: FontWeight.w500,
               ),
             ),
             const SizedBox(width: 2),
-            const Icon(Icons.chevron_right, size: 16, color: Color(0xFFC4C9C4)),
+            Icon(Icons.chevron_right, size: 16, color: kTextFaint),
           ],
         ),
       ),

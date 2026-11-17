@@ -55,7 +55,7 @@ class SalaryTemplatePage extends StatelessWidget {
                       '· 识别工资条时，没识别到的字段也会按它补出来\n\n'
                       '同一家公司换过工资条格式，就再建一套并设为生效；'
                       '旧的那套留着，随时能切回来。',
-              style: const TextStyle(fontSize: 12, height: 1.7, color: Color(0xFF3D5A54)),
+              style: TextStyle(fontSize: 12, height: 1.7, color: kInfoText),
             ),
           ),
           const SizedBox(height: 14),
@@ -64,10 +64,10 @@ class SalaryTemplatePage extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 40),
               child: Column(
                 children: [
-                  const Icon(Icons.assignment_outlined, size: 40, color: Color(0xFFC4C9C4)),
+                  Icon(Icons.assignment_outlined, size: 40, color: kTextFaint),
                   const SizedBox(height: 12),
-                  const Text('还没有模板',
-                      style: TextStyle(fontSize: 13.5, color: Color(0xFF8A8F8A))),
+                  Text('还没有模板',
+                      style: TextStyle(fontSize: 13.5, color: kTextSecondary)),
                   const SizedBox(height: 6),
                   TextButton(
                     onPressed: () => _openEditor(context, null),
@@ -113,7 +113,7 @@ class SalaryTemplatePage extends StatelessWidget {
             subtitle: Text(
               '${t.incomeFields.length} 收入 · ${t.deductionFields.length} 扣款 · '
               '${t.infoFields.length} 信息',
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A)),
+              style: TextStyle(fontSize: 11.5, color: kTextHint),
             ),
             trailing: PopupMenuButton<String>(
               icon: const Icon(Icons.more_horiz, size: 20),
@@ -320,7 +320,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
           _group('扣款项', kCategoryDeduction, Icons.remove_circle_outline, kDeduction),
           const SizedBox(height: 12),
           _group('信息项（不计入合计）', kFieldInfo, Icons.badge_outlined,
-              const Color(0xFF7A807A)),
+              kTextMedium),
           const SizedBox(height: 18),
           OutlinedButton.icon(
             onPressed: () => _addField(),
@@ -354,17 +354,17 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
                     style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 Text('${items.length} 项',
-                    style: const TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+                    style: TextStyle(fontSize: 11, color: kTextHint)),
               ],
             ),
           ),
           if (items.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(14, 0, 14, 10),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text('暂无',
-                    style: TextStyle(fontSize: 12, color: Color(0xFFB0B5B0))),
+                    style: TextStyle(fontSize: 12, color: kTextHint)),
               ),
             ),
           for (final f in items)
@@ -373,10 +373,10 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
               contentPadding: const EdgeInsets.symmetric(horizontal: 14),
               title: Text(f.name, style: const TextStyle(fontSize: 13.5)),
               subtitle: switch (f.valueType) {
-                kValueCoefficient => const Text('系数型',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
-                kValueDerived => const Text('推算型 · 不计入合计',
-                    style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+                kValueCoefficient => Text('系数型',
+                    style: TextStyle(fontSize: 11, color: kTextHint)),
+                kValueDerived => Text('推算型 · 不计入合计',
+                    style: TextStyle(fontSize: 11, color: kTextHint)),
                 _ => null,
               },
               trailing: Row(
@@ -535,14 +535,14 @@ class _FieldEditDialogState extends State<_FieldEditDialog> {
                 kValueDerived => '推算型：如基本绩效，由「绩效工资 ÷ 绩效系数」反推，不计入合计',
                 _ => '金额型：正常参与应发 / 代扣合计',
               },
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A), height: 1.5),
+              style: TextStyle(fontSize: 11.5, color: kTextHint, height: 1.5),
             ),
           ],
           if (_category == kFieldInfo)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text('信息项只做记录，永远不会计入合计',
-                  style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+                  style: TextStyle(fontSize: 11.5, color: kTextHint)),
             ),
         ],
       ),

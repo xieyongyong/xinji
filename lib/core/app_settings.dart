@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../ui/theme.dart';
+
 /// 全局用户偏好。
 ///
 /// 只放"影响显示与计算规则"的小配置，业务数据一律在 SQLite 里。
@@ -10,6 +12,8 @@ class AppSettings extends ChangeNotifier {
   static const _kDownColor = 'color_down';
   static const _kCompressImages = 'compress_images';
   static const _kDeWatermark = 'de_watermark';
+  static const _kSeedIndex = 'theme_seed_index';
+  static const _kThemeMode = 'theme_mode'; // 0=system 1=light 2=dark
 
   /// 绩效工资是否按「基本绩效 × 绩效系数」自动计算
   bool perfAuto = false;
@@ -32,6 +36,15 @@ class AppSettings extends ChangeNotifier {
   /// 下跌颜色（默认绿）
   int downColorValue = 0xFF2E7D32;
 
+  /// 主题配色序号（对应 kSeedSchemes），默认 0=靛蓝
+  int seedIndex = 0;
+
+  /// 深浅模式：0=跟随系统 1=浅色 2=深色
+  int themeMode = 0;
+
+  ThemeMode get materialThemeMode =>
+      ThemeMode.values[themeMode.clamp(0, 2)];
+
   Color get upColor => Color(upColorValue);
   Color get downColor => Color(downColorValue);
 
@@ -42,7 +55,33 @@ class AppSettings extends ChangeNotifier {
     downColorValue = sp.getInt(_kDownColor) ?? 0xFF2E7D32;
     compressImages = sp.getBool(_kCompressImages) ?? true;
     deWatermark = sp.getBool(_kDeWatermark) ?? true;
+    seedIndex = sp.getInt(_kSeedIndex) ?? 0;
+    themeMode = sp.getInt(_kThemeMode) ?? 0;
+    _syncPalette();
     notifyListeners();
+  }
+
+  /// 把当前偏好同步给全局调色板（语义色 getter 从这里读）。
+  /// platformBrightness 在 App 启动时用系统值；切模式后 MaterialApp 会 rebuild。
+  void _syncPalette() {
+    final platform = WidgetsBinding.instance.platformDispatcher.platformBrightness;
+    applyAppTheme(seedIndex: seedIndex, mode: materialThemeMode, platformBrightness: platform);
+  }
+
+  Future<void> setSeedIndex(int v) async {
+    seedIndex = v.clamp(0, kSeedSchemes.length - 1);
+    _syncPalette();
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kSeedIndex, seedIndex);
+  }
+
+  Future<void> setThemeMode(int v) async {
+    themeMode = v.clamp(0, 2);
+    _syncPalette();
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kThemeMode, themeMode);
   }
 
   Future<void> setCompressImages(bool v) async {

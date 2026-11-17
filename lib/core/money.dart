@@ -50,7 +50,7 @@ int? parseAmountToCents(String raw) {
   if (hasDigit) {
     s = s
         .replaceAll(RegExp(r'[Oo]'), '0')
-        .replaceAll(RegExp(r'[lI|]'), '1')
+        .replaceAll(RegExp(r'[lI]'), '1')
         .replaceAll(RegExp(r'[Ss]'), '5'); // 仅当整串已是数字混排时生效
   }
 
@@ -121,12 +121,11 @@ double? parseCoefficient(String raw) {
   var s = raw
       .trim()
       .replaceAll('．', '.')
-      .replaceAll('．', '.')
       .replaceAll(' ', '')
       .replaceAll('%', '');
   if (s.isEmpty) return null;
   if (RegExp(r'\d').hasMatch(s)) {
-    s = s.replaceAll(RegExp(r'[Oo]'), '0').replaceAll(RegExp(r'[lI|]'), '1');
+    s = s.replaceAll(RegExp(r'[Oo]'), '0').replaceAll(RegExp(r'[lI]'), '1');
   }
   final v = double.tryParse(s);
   if (v == null) return null;

@@ -749,9 +749,9 @@ class _ReviewPageState extends State<ReviewPage> {
                       errorBuilder: (_, __, ___) => Container(
                         width: 56,
                         height: 74,
-                        color: const Color(0xFFEDEFED),
-                        child: const Icon(Icons.broken_image_outlined,
-                            size: 20, color: Color(0xFFB0B5B0)),
+                        color: kBorder,
+                        child: Icon(Icons.broken_image_outlined,
+                            size: 20, color: kTextHint),
                       ),
                     ),
                   ),
@@ -823,7 +823,7 @@ class _ReviewPageState extends State<ReviewPage> {
               Icon(
                 errorIssues.isEmpty ? Icons.auto_awesome : Icons.warning_amber_rounded,
                 size: 16,
-                color: errorIssues.isEmpty ? kSeed : const Color(0xFF9A6B00),
+                color: errorIssues.isEmpty ? kSeed : kWarnIcon,
               ),
               const SizedBox(width: 6),
               Expanded(
@@ -832,7 +832,7 @@ class _ReviewPageState extends State<ReviewPage> {
                   style: TextStyle(
                     fontSize: 12.5,
                     fontWeight: FontWeight.w600,
-                    color: errorIssues.isEmpty ? kSeed : const Color(0xFF6B4E00),
+                    color: errorIssues.isEmpty ? kSeed : kWarnText,
                   ),
                 ),
               ),
@@ -841,8 +841,8 @@ class _ReviewPageState extends State<ReviewPage> {
           for (final issue in errorIssues) ...[
             const SizedBox(height: 6),
             Text('· ${issue.message}',
-                style: const TextStyle(
-                    fontSize: 11.8, height: 1.5, color: Color(0xFF8A6A1F))),
+                style: TextStyle(
+                    fontSize: 11.8, height: 1.5, color: kWarnLink)),
           ],
           if (m.removedDuplicates.isNotEmpty) ...[
             const SizedBox(height: 6),
@@ -854,7 +854,7 @@ class _ReviewPageState extends State<ReviewPage> {
                   children: [
                     Text(
                       _showDuplicates ? '收起已去除项' : '查看已去除的 ${m.removedDuplicates.length} 项重复',
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 11.8, color: kSeed, fontWeight: FontWeight.w500),
                     ),
                     Icon(
@@ -874,7 +874,7 @@ class _ReviewPageState extends State<ReviewPage> {
                     children: [
                       Expanded(
                         child: Text('${dup.name}  ${formatCents(dup.amountCents)}',
-                            style: const TextStyle(fontSize: 11.5, color: Color(0xFF6B6F6B))),
+                            style: TextStyle(fontSize: 11.5, color: kTextMedium)),
                       ),
                       GestureDetector(
                         onTap: () {
@@ -885,7 +885,7 @@ class _ReviewPageState extends State<ReviewPage> {
                             _normalizeOrder();
                           });
                         },
-                        child: const Text('撤回',
+                        child: Text('撤回',
                             style: TextStyle(fontSize: 11.5, color: kSeed)),
                       ),
                     ],
@@ -907,7 +907,7 @@ class _ReviewPageState extends State<ReviewPage> {
         title: const Text('发薪雇主', style: TextStyle(fontSize: 14)),
         trailing: Text(
           current?.name ?? '未设置',
-          style: const TextStyle(fontSize: 14, color: Color(0xFF8A8F8A)),
+          style: TextStyle(fontSize: 14, color: kTextSecondary),
         ),
       );
     }
@@ -917,7 +917,7 @@ class _ReviewPageState extends State<ReviewPage> {
         value: employers.any((e) => e.id == _employerId) ? _employerId : null,
         underline: const SizedBox.shrink(),
         hint: const Text('选择', style: TextStyle(fontSize: 14)),
-        style: const TextStyle(fontSize: 14, color: Color(0xFF1B1C1B)),
+        style: TextStyle(fontSize: 14, color: kTextPrimary),
         items: employers
             .map((Employer e) => DropdownMenuItem<int>(
                   value: e.id,
@@ -941,7 +941,7 @@ class _ReviewPageState extends State<ReviewPage> {
               children: [
                 Text('$_year 年 $_month 月',
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC4C9C4)),
+                Icon(Icons.chevron_right, size: 18, color: kTextFaint),
               ],
             ),
             onTap: _pickPeriod,
@@ -955,7 +955,7 @@ class _ReviewPageState extends State<ReviewPage> {
                 child: Text(
                   '工资条上写的是 ${widget.outcome!.periodYear} 年 '
                   '${widget.outcome!.periodMonth} 月，点这里改过来',
-                  style: const TextStyle(fontSize: 11.5, color: kSeed, height: 1.4),
+                  style: TextStyle(fontSize: 11.5, color: kSeed, height: 1.4),
                 ),
               ),
             ),
@@ -1036,17 +1036,17 @@ class _ReviewPageState extends State<ReviewPage> {
                     style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
                 const Spacer(),
                 Text(subtitle,
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF8A8F8A))),
+                    style: TextStyle(fontSize: 12, color: kTextSecondary)),
               ],
             ),
           ),
           if (items.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text('暂无，点下面添加',
-                    style: TextStyle(fontSize: 12.5, color: Color(0xFFB0B5B0))),
+                    style: TextStyle(fontSize: 12.5, color: kTextHint)),
               ),
             ),
           for (final item in items) _itemRow(item),
@@ -1081,7 +1081,7 @@ class _ReviewPageState extends State<ReviewPage> {
                 item.name.isEmpty ? '（未命名）' : item.name,
                 style: TextStyle(
                   fontSize: 13.5,
-                  color: item.name.isEmpty ? const Color(0xFFB0B5B0) : const Color(0xFF1B1C1B),
+                  color: item.name.isEmpty ? kTextHint : kTextPrimary,
                 ),
               ),
             ),
@@ -1100,11 +1100,11 @@ class _ReviewPageState extends State<ReviewPage> {
                   margin: const EdgeInsets.only(right: 5),
                   padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF2F4F2),
+                    color: kSurfaceAlt,
                     borderRadius: BorderRadius.circular(4),
                   ),
-                  child: const Text('推算',
-                      style: TextStyle(fontSize: 9.5, color: Color(0xFF8A8F8A))),
+                  child: Text('推算',
+                      style: TextStyle(fontSize: 9.5, color: kTextSecondary)),
                 ),
               Text(
                 formatCents(item.category == kCategoryDeduction
@@ -1114,13 +1114,13 @@ class _ReviewPageState extends State<ReviewPage> {
                   fontSize: 13.5,
                   fontWeight: item.isDerived ? FontWeight.w400 : FontWeight.w500,
                   color: item.isDerived
-                      ? const Color(0xFF8A8F8A)
-                      : const Color(0xFF1B1C1B),
+                      ? kTextSecondary
+                      : kTextPrimary,
                 ),
               ),
             ],
             const SizedBox(width: 6),
-            const Icon(Icons.edit_outlined, size: 14, color: Color(0xFFC4C9C4)),
+            Icon(Icons.edit_outlined, size: 14, color: kTextFaint),
           ],
         ),
       ),
@@ -1158,12 +1158,12 @@ class _ReviewPageState extends State<ReviewPage> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.functions, size: 15, color: kSeed),
+          Icon(Icons.functions, size: 15, color: kSeed),
           const SizedBox(width: 7),
           Expanded(
             child: Text(
               text,
-              style: const TextStyle(fontSize: 11.8, color: Color(0xFF3D5A54), height: 1.4),
+              style: TextStyle(fontSize: 11.8, color: kInfoText, height: 1.4),
             ),
           ),
         ],
@@ -1185,25 +1185,25 @@ class _ReviewPageState extends State<ReviewPage> {
                   width: 3,
                   height: 14,
                   decoration: BoxDecoration(
-                      color: const Color(0xFF9AA09A),
+                      color: kTextHint,
                       borderRadius: BorderRadius.circular(2)),
                 ),
                 const SizedBox(width: 8),
                 const Text('信息项',
                     style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
                 const Spacer(),
-                const Text('不计入合计',
-                    style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+                Text('不计入合计',
+                    style: TextStyle(fontSize: 11.5, color: kTextHint)),
               ],
             ),
           ),
           if (_infos.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.fromLTRB(16, 0, 16, 10),
               child: Align(
                 alignment: Alignment.centerLeft,
                 child: Text('暂无。可记录姓名、工号、业务单位、应出勤天数等',
-                    style: TextStyle(fontSize: 12, color: Color(0xFFB0B5B0))),
+                    style: TextStyle(fontSize: 12, color: kTextHint)),
               ),
             ),
           for (var i = 0; i < _infos.length; i++)
@@ -1217,7 +1217,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       flex: 4,
                       child: Text(
                         _infos[i].name.isEmpty ? '（未命名）' : _infos[i].name,
-                        style: const TextStyle(fontSize: 13, color: Color(0xFF4A4F4A)),
+                        style: TextStyle(fontSize: 13, color: kTextBody),
                       ),
                     ),
                     Expanded(
@@ -1228,13 +1228,13 @@ class _ReviewPageState extends State<ReviewPage> {
                         style: TextStyle(
                           fontSize: 13,
                           color: _infos[i].value.isEmpty
-                              ? const Color(0xFFC4C9C4)
-                              : const Color(0xFF1B1C1B),
+                              ? kTextFaint
+                              : kTextPrimary,
                         ),
                       ),
                     ),
                     const SizedBox(width: 6),
-                    const Icon(Icons.edit_outlined, size: 14, color: Color(0xFFC4C9C4)),
+                    Icon(Icons.edit_outlined, size: 14, color: kTextFaint),
                   ],
                 ),
               ),
@@ -1245,9 +1245,9 @@ class _ReviewPageState extends State<ReviewPage> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
               child: Row(
                 children: const [
-                  Icon(Icons.add_circle_outline, size: 16, color: Color(0xFF7A807A)),
+                  Icon(Icons.add_circle_outline, size: 16, color: kTextMedium),
                   SizedBox(width: 6),
-                  Text('添加信息项', style: TextStyle(fontSize: 13, color: Color(0xFF7A807A))),
+                  Text('添加信息项', style: TextStyle(fontSize: 13, color: kTextMedium)),
                 ],
               ),
             ),
@@ -1292,11 +1292,11 @@ class _ReviewPageState extends State<ReviewPage> {
                   onTap: _applyComputedTotals,
                   child: Row(
                     children: [
-                      const Icon(Icons.calculate_outlined, size: 14, color: kSeed),
+                      Icon(Icons.calculate_outlined, size: 14, color: kSeed),
                       const SizedBox(width: 5),
                       Text(
                         '按明细重算（$_items.length 项）',
-                        style: const TextStyle(fontSize: 12, color: kSeed),
+                        style: TextStyle(fontSize: 12, color: kSeed),
                       ),
                     ],
                   ),
@@ -1321,15 +1321,15 @@ class _ReviewPageState extends State<ReviewPage> {
                       '收入明细加总 ${formatCents(_incomeSum)}，'
                       '与应发合计 ${formatCents(gross ?? 0)} 相差 '
                       '${formatCents((_incomeSum - (gross ?? 0)).abs())}',
-                      style: const TextStyle(
-                          fontSize: 11.8, height: 1.5, color: Color(0xFF6B4E00)),
+                      style: TextStyle(
+                          fontSize: 11.8, height: 1.5, color: kWarnText),
                     ),
                   if (!consistent && gross != null && deduction != null && net != null)
                     Text(
                       '应发 − 代扣 = ${formatCents(gross - deduction)}，'
                       '但实发填的是 ${formatCents(net)}',
-                      style: const TextStyle(
-                          fontSize: 11.8, height: 1.5, color: Color(0xFF6B4E00)),
+                      style: TextStyle(
+                          fontSize: 11.8, height: 1.5, color: kWarnText),
                     ),
                 ],
               ),
@@ -1346,7 +1346,7 @@ class _ReviewPageState extends State<ReviewPage> {
       children: [
         SizedBox(
           width: 76,
-          child: Text(label, style: const TextStyle(fontSize: 13.5, color: Color(0xFF4A4F4A))),
+          child: Text(label, style: TextStyle(fontSize: 13.5, color: kTextBody)),
         ),
         Expanded(
           child: TextField(
@@ -1359,7 +1359,7 @@ class _ReviewPageState extends State<ReviewPage> {
             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
             decoration: InputDecoration(
               hintText: hint,
-              hintStyle: const TextStyle(fontSize: 13, color: Color(0xFFC4C9C4)),
+              hintStyle: TextStyle(fontSize: 13, color: kTextFaint),
               isDense: true,
               contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
               border: const OutlineInputBorder(),
@@ -1462,10 +1462,10 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
             ),
           ),
           const SizedBox(height: 10),
-          const Align(
+          Align(
             alignment: Alignment.centerLeft,
             child: Text('信息项只做记录，不会计入任何合计',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
+                style: TextStyle(fontSize: 11.5, color: kTextHint)),
           ),
         ],
       ),
@@ -1652,12 +1652,12 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
           ),
           if (_valueType == kValueDerived) ...[
             const SizedBox(height: 8),
-            const Align(
+            Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 '推算值：由公式反推得到，能看到但不计入合计\n'
                 '（基本绩效 = 绩效工资 ÷ 绩效系数）',
-                style: TextStyle(fontSize: 11, height: 1.5, color: Color(0xFF9AA09A)),
+                style: TextStyle(fontSize: 11, height: 1.5, color: kTextHint),
               ),
             ),
           ],
@@ -1687,9 +1687,9 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
               contentPadding: EdgeInsets.zero,
               controlAffinity: ListTileControlAffinity.leading,
               title: const Text('记住这个项目的归类', style: TextStyle(fontSize: 12.5)),
-              subtitle: const Text(
+              subtitle: Text(
                 '下次识别到同名项目，自动按这次的规则处理（收入/扣款/信息项）',
-                style: TextStyle(fontSize: 11, height: 1.4, color: Color(0xFF9AA09A)),
+                style: TextStyle(fontSize: 11, height: 1.4, color: kTextHint),
               ),
             ),
           ],

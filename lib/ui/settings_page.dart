@@ -15,9 +15,11 @@ import '../data/db.dart';
 import '../data/models.dart';
 import '../security/lock_service.dart';
 import '../state/app_state.dart';
+import 'cloud_backup_page.dart';
 import 'employer_page.dart';
 import 'lock_page.dart';
 import 'salary_template_page.dart';
+import 'theme.dart';
 import 'theme.dart';
 import 'update_dialog.dart';
 
@@ -137,9 +139,9 @@ class _SettingsPageState extends State<SettingsPage> {
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 '备份里有你全部工资数据，一旦忘记密码，这份备份就再也打不开了。',
-                style: TextStyle(fontSize: 12.5, height: 1.6, color: Color(0xFF8A6A1F)),
+                style: TextStyle(fontSize: 12.5, height: 1.6, color: kWarnLink),
               ),
               const SizedBox(height: 14),
               TextField(
@@ -234,7 +236,9 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final result = await service.importFromFile(path, password: password);
       if (!mounted) return;
-      await context.read<AppState>().reload();
+      // 偏好写回了 SharedPreferences，重新加载让主题/开关立即生效
+      await context.read<AppSettings>().load();
+      await context.read<AppState>().reload(rereadCurrentEmployer: true);
       if (!mounted) return;
       setState(() => _busy = false);
 
@@ -373,6 +377,24 @@ class _SettingsPageState extends State<SettingsPage> {
           ListView(
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
             children: [
+              _sectionTitle('外观'),
+              _card([
+                _item(
+                  icon: Icons.brightness_6_outlined,
+                  title: '深浅模式',
+                  subtitle: const ['跟随系统', '浅色', '深色'][settings.themeMode.clamp(0, 2)],
+                  trailing: const SizedBox.shrink(),
+                  onTap: () => _pickThemeMode(context, settings),
+                ),
+                _swatches(settings),
+                _item(
+                  icon: Icons.palette_outlined,
+                  title: '主题配色',
+                  subtitle: '当前：${kSeedSchemes[settings.seedIndex.clamp(0, kSeedSchemes.length - 1)].name}',
+                  trailing: const SizedBox.shrink(),
+                  onTap: () => _pickSeed(context, settings),
+                ),
+              ]),
               _sectionTitle('安全'),
               _card([
                 _item(
@@ -457,6 +479,15 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: '⚠️ 会覆盖当前全部数据',
                   onTap: _restoreBackup,
                 ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.cloud_outlined,
+                  title: '云盘备份（WebDAV）',
+                  subtitle: '传到自己的坚果云 / NAS，默认关闭',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const CloudBackupPage()),
+                  ),
+                ),
               ]),
               const SizedBox(height: 18),
               _sectionTitle('雇主'),
@@ -496,28 +527,28 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.compressImages,
                   onChanged: (v) => settings.setCompressImages(v),
                   title: const Text('保存时压缩图片', style: TextStyle(fontSize: 14)),
-                  subtitle: const Text(
+                  subtitle: Text(
                     '开启：宽度压到 1600、JPEG 质量 88，字仍然看得清，最省空间。\n'
                     '关闭：原图直接存进 App 私有目录，细节完全保留，但长截图能占好几 MB。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
                   ),
                   isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  secondary: const Icon(Icons.compress, size: 20, color: Color(0xFF4A4F4A)),
+                  secondary: Icon(Icons.compress, size: 20, color: kTextBody),
                 ),
                 const Divider(height: 1),
                 SwitchListTile(
                   value: settings.deWatermark,
                   onChanged: (v) => settings.setDeWatermark(v),
                   title: const Text('识别前去除浅灰水印', style: TextStyle(fontSize: 14)),
-                  subtitle: const Text(
+                  subtitle: Text(
                     '把比纸面浅一大截的灰色（水印、屏幕上下的渐变）刷成白，再交给识别。\n'
                     '如果发现某个浅色小字没被识别出来，可以关掉这里再试一次。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
                   ),
                   isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  secondary: const Icon(Icons.auto_fix_high, size: 20, color: Color(0xFF4A4F4A)),
+                  secondary: Icon(Icons.auto_fix_high, size: 20, color: kTextBody),
                 ),
               ]),
               const SizedBox(height: 18),
@@ -543,14 +574,14 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.perfAuto,
                   onChanged: (v) => settings.setPerfAuto(v),
                   title: const Text('绩效工资自动计算', style: TextStyle(fontSize: 14)),
-                  subtitle: const Text(
+                  subtitle: Text(
                     '开启后：绩效工资 = 基本绩效 × 绩效系数。\n'
                     '没填基本绩效时，一律按「绩效工资 ÷ 系数」反推（推算值不计入合计）',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: Color(0xFF9AA09A)),
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
                   ),
                   isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  secondary: const Icon(Icons.functions, size: 20, color: Color(0xFF4A4F4A)),
+                  secondary: Icon(Icons.functions, size: 20, color: kTextBody),
                 ),
                 const Divider(height: 1),
                 _colorItem(
@@ -592,7 +623,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onTap: _showDiagnostics,
                 ),
                 const Divider(height: 1),
-                const Padding(
+                Padding(
                   padding: EdgeInsets.all(14),
                   child: Text(
                     '所有工资数据、工资条图片都只存在这台手机里，'
@@ -600,7 +631,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     '唯一会联网的地方是「检查更新 / 应用内更新」：向 GitHub 读版本号、'
                     '下载安装包，不会上传任何数据。\n\n'
                     '卸载 App 会连同数据一起删除，请定期导出备份。',
-                    style: TextStyle(fontSize: 12, height: 1.8, color: Color(0xFF8A8F8A)),
+                    style: TextStyle(fontSize: 12, height: 1.8, color: kTextSecondary),
                   ),
                 ),
               ]),
@@ -654,7 +685,7 @@ class _SettingsPageState extends State<SettingsPage> {
             decoration: BoxDecoration(color: current, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
-          const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC4C9C4)),
+          Icon(Icons.chevron_right, size: 18, color: kTextFaint),
         ],
       ),
       onTap: () async {
@@ -694,7 +725,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     shape: BoxShape.circle,
                     border: Border.all(
                       color: current == Color(argb)
-                          ? const Color(0xFF1B1C1B)
+                          ? kTextPrimary
                           : Colors.transparent,
                       width: 2.5,
                     ),
@@ -790,12 +821,109 @@ class _SettingsPageState extends State<SettingsPage> {
     return '当前雇主 · $count 套，生效：${tpl.name}（${tpl.fields.length} 个字段）';
   }
 
+  /// 配色方案的小色块，点一下直接切换，省得进二级页
+  Widget _swatches(AppSettings settings) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
+      child: Row(
+        children: [
+          for (var i = 0; i < kSeedSchemes.length; i++)
+            GestureDetector(
+              onTap: () => settings.setSeedIndex(i),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                margin: const EdgeInsets.only(right: 10),
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: kSeedSchemes[i].seed,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: settings.seedIndex == i ? kTextPrimary : Colors.transparent,
+                    width: 2,
+                  ),
+                ),
+                child: settings.seedIndex == i
+                    ? const Icon(Icons.check, size: 16, color: Colors.white)
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickThemeMode(BuildContext context, AppSettings settings) async {
+    final v = await showDialog<int>(
+      context: context,
+      builder: (_) => SimpleDialog(
+        title: const Text('深浅模式', style: TextStyle(fontSize: 15)),
+        children: [
+          for (var i = 0; i < 3; i++)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(i),
+              child: Row(
+                children: [
+                  Icon(
+                    [Icons.brightness_auto, Icons.light_mode, Icons.dark_mode][i],
+                    size: 18,
+                    color: kTextBody,
+                  ),
+                  const SizedBox(width: 12),
+                  Text(['跟随系统', '浅色', '深色'][i], style: const TextStyle(fontSize: 14)),
+                  if (settings.themeMode == i) ...[
+                    const Spacer(),
+                    Icon(Icons.check, size: 18, color: kSeed),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (v != null) await settings.setThemeMode(v);
+  }
+
+  Future<void> _pickSeed(BuildContext context, AppSettings settings) async {
+    final v = await showDialog<int>(
+      context: context,
+      builder: (_) => SimpleDialog(
+        title: const Text('主题配色', style: TextStyle(fontSize: 15)),
+        children: [
+          for (var i = 0; i < kSeedSchemes.length; i++)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(context).pop(i),
+              child: Row(
+                children: [
+                  Container(
+                    width: 18,
+                    height: 18,
+                    decoration: BoxDecoration(
+                      color: kSeedSchemes[i].seed,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(kSeedSchemes[i].name, style: const TextStyle(fontSize: 14)),
+                  if (settings.seedIndex == i) ...[
+                    const Spacer(),
+                    Icon(Icons.check, size: 18, color: kSeed),
+                  ],
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (v != null) await settings.setSeedIndex(v);
+  }
+
   Widget _sectionTitle(String text) => Padding(
         padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
         child: Text(text,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 12.5,
-                color: Color(0xFF8A8F8A),
+                color: kTextSecondary,
                 fontWeight: FontWeight.w500)),
       );
 
@@ -812,13 +940,13 @@ class _SettingsPageState extends State<SettingsPage> {
     VoidCallback? onTap,
   }) {
     return ListTile(
-      leading: Icon(icon, size: 20, color: const Color(0xFF4A4F4A)),
+      leading: Icon(icon, size: 20, color: kTextBody),
       title: Text(title, style: const TextStyle(fontSize: 14)),
       subtitle: subtitle == null
           ? null
           : Text(subtitle,
-              style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A))),
-      trailing: trailing ?? const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC4C9C4)),
+              style: TextStyle(fontSize: 11.5, color: kTextHint)),
+      trailing: trailing ?? Icon(Icons.chevron_right, size: 18, color: kTextFaint),
       onTap: onTap,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
     );
@@ -852,12 +980,12 @@ class TemplatePage extends StatelessWidget {
               color: kInfoBg,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Text(
+            child: Text(
               '模板有两个作用：\n'
               '1. 识别时把 OCR 认出来的名字归一到标准名\n'
               '2. 对比时把「岗位津贴」和「岗位工资」这种同义不同名对齐\n\n'
               '公司改项目名了，在这里给它加个别名就行。',
-              style: TextStyle(fontSize: 12, height: 1.75, color: Color(0xFF3D5A54)),
+              style: TextStyle(fontSize: 12, height: 1.75, color: kInfoText),
             ),
           ),
           const SizedBox(height: 16),
@@ -889,9 +1017,9 @@ class TemplatePage extends StatelessWidget {
                   if (t.valueType == kValueCoefficient) '系数型',
                   if (t.aliases.isNotEmpty) '别名：${t.aliases.join('、')}',
                 ].join('  '),
-                style: const TextStyle(fontSize: 11, color: Color(0xFF9AA09A)),
+                style: TextStyle(fontSize: 11, color: kTextHint),
               ),
-              trailing: const Icon(Icons.edit_outlined, size: 16, color: Color(0xFFC4C9C4)),
+              trailing: Icon(Icons.edit_outlined, size: 16, color: kTextFaint),
               onTap: () => _edit(context, t),
             ),
         ],

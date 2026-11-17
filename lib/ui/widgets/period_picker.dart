@@ -76,7 +76,7 @@ class _PeriodPickerDialogState extends State<PeriodPickerDialog> {
               child: Container(
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: selected ? kSeed : const Color(0xFFF2F4F2),
+                  color: selected ? kSeed : kSurfaceAlt,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
@@ -84,8 +84,8 @@ class _PeriodPickerDialogState extends State<PeriodPickerDialog> {
                   style: TextStyle(
                     fontSize: 13,
                     color: future
-                        ? const Color(0xFFC4C9C4)
-                        : (selected ? Colors.white : const Color(0xFF4A4F4A)),
+                        ? kTextFaint
+                        : (selected ? Colors.white : kTextBody),
                     fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),

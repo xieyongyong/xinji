@@ -42,7 +42,9 @@ class UpdateDownloadService : Service() {
         const val EXTRA_VERSION = "version"
         const val EXTRA_PATH = "path"
 
-        private const val CHANNEL_ID = "xinji_update"
+        // 换 id：老用户已建的 xinji_update 渠道是 LOW，系统不允许改 importance，
+        // 用新 id 才能让"下载完成"通知正常弹出来。
+        private const val CHANNEL_ID = "xinji_update_v2"
         private const val NOTIFY_ID = 2026
     }
 
@@ -110,30 +112,47 @@ class UpdateDownloadService : Service() {
         val partial = File(dir, "xinji-$version.apk.part")
 
         try {
-            if (partial.exists()) partial.delete()
+            // 断点续传：保留上次没下完的 .part，从已下载字节处接着下。
+            // 只有"版本变了/长度对不上/服务端不支持 Range"时才从头下。
+            val already = if (partial.exists()) partial.length() else 0L
             val conn = URL(url).openConnection() as HttpURLConnection
             connection = conn
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 30_000
+            conn.connectTimeout = 20_000
+            // 慢速网络下 30s 没有新数据会被判超时；放宽到 120s，
+            // 期间只要有字节进来计时就会重置，不会误杀正常下载。
+            conn.readTimeout = 120_000
             conn.setRequestProperty("User-Agent", "xinji-android-updater")
             conn.instanceFollowRedirects = true
+            if (already > 0) {
+                conn.setRequestProperty("Range", "bytes=$already-")
+            }
             conn.connect()
 
             val code = conn.responseCode
             if (code !in 200..299) throw IOException("下载失败：HTTP $code")
-            val total = conn.contentLength.toLong().coerceAtLeast(0)
-            var received = 0L
-            var lastUi = 0L
+            // 206 = 服务端接受 Range，接着写；200 = 不支持 Range，从头写
+            val resume = already > 0 && code == HttpURLConnection.HTTP_PARTIAL
+            var received = if (resume) already else 0L
+            // contentLength 在 206 时是"剩余字节"，要加上已下的才是总大小
+            val contentLen = conn.contentLength.toLong().coerceAtLeast(0)
+            val total = if (resume && contentLen > 0) already + contentLen else contentLen
+            if (!resume && partial.exists() && !partial.delete()) {
+                throw IOException("旧的不完整文件删不掉")
+            }
 
-            FileOutputStream(partial).use { out ->
+            FileOutputStream(partial, resume).use { out ->
                 conn.inputStream.use { input ->
                     val buf = ByteArray(64 * 1024)
+                    var lastUi = 0L
+                    var lastSpeedAt = System.currentTimeMillis()
+                    var bytesSinceSpeed = 0L
                     while (true) {
                         if (cancelled) throw InterruptedException("已取消")
                         val n = input.read(buf)
                         if (n < 0) break
                         out.write(buf, 0, n)
                         received += n
+                        bytesSinceSpeed += n
 
                         val now = System.currentTimeMillis()
                         if (now - lastUi >= 250 || (total > 0 && received >= total)) {
@@ -145,6 +164,12 @@ class UpdateDownloadService : Service() {
                             )
                             notifyProgress(pct, version)
                         }
+                        // 每 10 秒识别一次"完全不动"的假连接，避免一直挂着不报错
+                        if (now - lastSpeedAt >= 10_000) {
+                            if (bytesSinceSpeed <= 0) throw IOException("下载停滞，换个网络再试")
+                            lastSpeedAt = now
+                            bytesSinceSpeed = 0
+                        }
                     }
                 }
                 out.flush()
@@ -153,6 +178,10 @@ class UpdateDownloadService : Service() {
             // 下到几 KB 就"成功"基本是 GitHub 的错误页或被网关截了，别拿去安装
             if (partial.length() < 1024 * 1024) {
                 throw IOException("下载到的文件太小，可能不是安装包")
+            }
+            // 服务端给了总大小时核对一遍，防止续传拼出损坏的 APK
+            if (total > 0 && partial.length() != total) {
+                throw IOException("文件大小与服务器不一致，已删除重下")
             }
             if (final.exists() && !final.delete()) throw IOException("旧安装包删不掉")
             if (!partial.renameTo(final)) throw IOException("安装包保存失败")
@@ -166,15 +195,20 @@ class UpdateDownloadService : Service() {
             stopForegroundCompat(STOP_FOREGROUND_DETACH)
         } catch (t: Throwable) {
             if (!cancelled) {
-                val msg = when {
-                    t is IOException && t.message?.contains("HTTP", true) == true -> t.message!!
-                    t.message?.contains("failed to connect", true) == true ->
-                        "连不上下载服务器，换个网络再试（也可以在浏览器里下载）"
-                    t.message?.contains("timeout", true) == true -> "下载超时，换个网络再试"
-                    else -> t.message ?: t.toString()
+                // 内容损坏类的失败必须删掉 .part，否则下次续传接着拼坏文件，永远下不完
+                val msg = t.message.orEmpty()
+                if (msg.contains("太小") || msg.contains("不一致") || msg.contains("错误页")) {
+                    try { partial.delete() } catch (_: Throwable) {}
                 }
-                publish(UpdateDownloadController.FAILED, 0, 0, 0, version, null, msg)
-                startForeground(NOTIFY_ID, failedNotification(msg))
+                val shown = when {
+                    t is IOException && msg.contains("HTTP", true) -> msg
+                    msg.contains("failed to connect", true) ->
+                        "连不上下载服务器，换个网络再试"
+                    msg.contains("timeout", true) || msg.contains("停滞", true) -> "下载超时，换个网络再试"
+                    else -> msg.ifBlank { t.toString() }
+                }
+                publish(UpdateDownloadController.FAILED, 0, 0, 0, version, null, shown)
+                startForeground(NOTIFY_ID, failedNotification(shown))
                 stopForegroundCompat(STOP_FOREGROUND_DETACH)
             }
         } finally {
@@ -204,8 +238,8 @@ class UpdateDownloadService : Service() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "应用更新", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "后台下载新版本，点通知可以安装"
+            NotificationChannel(CHANNEL_ID, "应用更新", NotificationManager.IMPORTANCE_DEFAULT).apply {
+                description = "后台下载新版本，完成后点通知安装"
             }
         )
     }

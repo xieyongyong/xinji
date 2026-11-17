@@ -44,7 +44,7 @@ class EmployerPage extends StatelessWidget {
               color: kInfoBg,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: const Row(
+            child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Icon(Icons.info_outline, size: 15, color: kSeed),
@@ -54,7 +54,7 @@ class EmployerPage extends StatelessWidget {
                     '换工作后新增一家雇主即可，旧记录不会被改动。'
                     '首页只显示「当前雇主」的工资，看历史时切回去就看到了。\n'
                     '工资条模板也按公司分开：点「模板」进去，同一家公司可以存多套格式。',
-                    style: TextStyle(fontSize: 11.8, color: Color(0xFF3D5A54), height: 1.5),
+                    style: TextStyle(fontSize: 11.8, color: kInfoText, height: 1.5),
                   ),
                 ),
               ],
@@ -82,10 +82,10 @@ class EmployerPage extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: kSurface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: isCurrent ? kSeed.withOpacity(0.55) : const Color(0xFFE6E8E6),
+            color: isCurrent ? kSeed.withOpacity(0.55) : kDivider,
             width: isCurrent ? 1.4 : 1,
           ),
         ),
@@ -97,13 +97,13 @@ class EmployerPage extends StatelessWidget {
                 width: 34,
                 height: 34,
                 decoration: BoxDecoration(
-                  color: isCurrent ? kSeed : const Color(0xFFEDEFED),
+                  color: isCurrent ? kSeed : kBorder,
                   borderRadius: BorderRadius.circular(9),
                 ),
                 child: Icon(
                   Icons.business_outlined,
                   size: 18,
-                  color: isCurrent ? Colors.white : const Color(0xFF8A8F8A),
+                  color: isCurrent ? Colors.white : kTextSecondary,
                 ),
               ),
               const SizedBox(width: 11),
@@ -131,7 +131,7 @@ class EmployerPage extends StatelessWidget {
                               color: kInfoBg,
                               borderRadius: BorderRadius.circular(4),
                             ),
-                            child: const Text('当前',
+                            child: Text('当前',
                                 style: TextStyle(fontSize: 10, color: kSeed)),
                           ),
                         ],
@@ -144,7 +144,7 @@ class EmployerPage extends StatelessWidget {
                         '$count 条记录',
                         '$tplCount 套模板',
                       ].join(' · '),
-                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF9AA09A)),
+                      style: TextStyle(fontSize: 11.5, color: kTextHint),
                     ),
                   ],
                 ),
@@ -181,8 +181,8 @@ class EmployerPage extends StatelessWidget {
                       state.employers.length > 1 ? '删除' : '删除（至少保留一家）',
                       style: TextStyle(
                         color: state.employers.length > 1
-                            ? const Color(0xFFC62828)
-                            : const Color(0xFFB0B5B0),
+                            ? kUp
+                            : kTextHint,
                       ),
                     ),
                   ),
@@ -261,7 +261,7 @@ class EmployerPage extends StatelessWidget {
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: const Color(0xFFC62828)),
+                style: FilledButton.styleFrom(backgroundColor: kUp),
                 onPressed: () => Navigator.pop(ctx, target),
                 child: const Text('删除'),
               ),
@@ -357,8 +357,8 @@ class _EmployerEditDialogState extends State<_EmployerEditDialog> {
               ),
             ),
             const SizedBox(height: 16),
-            const Text('在职区间（可选，用来录入时自动选中）',
-                style: TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A))),
+            Text('在职区间（可选，用来录入时自动选中）',
+                style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
             const SizedBox(height: 6),
             _periodRow('开始', _label(_startYear, _startMonth, '不设置'),
                 () => _pick(isStart: true),

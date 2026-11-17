@@ -124,14 +124,14 @@ class _StatsPageState extends State<StatsPage> {
             color: selected ? kSeed : Colors.white,
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: selected ? kSeed : const Color(0xFFE6E8E6),
+              color: selected ? kSeed : kDivider,
             ),
           ),
           child: Text(
             text,
             style: TextStyle(
               fontSize: 13,
-              color: selected ? Colors.white : const Color(0xFF5A5F5A),
+              color: selected ? Colors.white : kTextMedium,
               fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
             ),
           ),
@@ -272,10 +272,10 @@ class _StatsPageState extends State<StatsPage> {
           padding: const EdgeInsets.symmetric(vertical: 60),
           child: Column(
             children: const [
-              Icon(Icons.insights_outlined, size: 40, color: Color(0xFFC4C9C4)),
+              Icon(Icons.insights_outlined, size: 40, color: kTextFaint),
               SizedBox(height: 12),
               Text('这个范围还没有数据',
-                  style: TextStyle(fontSize: 13.5, color: Color(0xFF8A8F8A))),
+                  style: TextStyle(fontSize: 13.5, color: kTextSecondary)),
             ],
           ),
         ),
@@ -324,8 +324,8 @@ class _StatsPageState extends State<StatsPage> {
               const Spacer(),
               if (years.length > 1)
                 Text('总计 ${formatCents(s.totalNet)}',
-                    style: const TextStyle(
-                        fontSize: 11.5, color: Color(0xFF8A8F8A))),
+                    style: TextStyle(
+                        fontSize: 11.5, color: kTextSecondary)),
             ],
           ),
           const SizedBox(height: 10),
@@ -355,7 +355,7 @@ class _StatsPageState extends State<StatsPage> {
                             child: LinearProgressIndicator(
                               value: (y.net / maxNet).clamp(0.0, 1.0).toDouble(),
                               minHeight: 8,
-                              backgroundColor: const Color(0xFFEDEFED),
+                              backgroundColor: kBorder,
                               valueColor:
                                   const AlwaysStoppedAnimation<Color>(kSeed),
                             ),
@@ -378,8 +378,8 @@ class _StatsPageState extends State<StatsPage> {
                       child: Text(
                         '${y.months} 个月 · 月均 ${formatCents(y.avgNet)}'
                         '${y.extraNet > 0 ? ' · 含奖金 ${formatCents(y.extraNet)}' : ''}',
-                        style: const TextStyle(
-                            fontSize: 10.5, color: Color(0xFF9AA09A)),
+                        style: TextStyle(
+                            fontSize: 10.5, color: kTextHint),
                       ),
                     ),
                   ],
@@ -388,8 +388,8 @@ class _StatsPageState extends State<StatsPage> {
             ),
           ],
           const SizedBox(height: 2),
-          const Text('点某一年可切到它的月度明细',
-              style: TextStyle(fontSize: 10.5, color: Color(0xFFB0B5B0))),
+          Text('点某一年可切到它的月度明细',
+              style: TextStyle(fontSize: 10.5, color: kTextHint)),
         ],
       ),
     );
@@ -417,7 +417,7 @@ class _StatsPageState extends State<StatsPage> {
                     ? '把每年的同一个月份加在一起，看长期规律'
                     : '最高的一个月 ${formatCents(maxNet)}')
                 : '还没有数据',
-            style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A)),
+            style: TextStyle(fontSize: 11.5, color: kTextSecondary),
           ),
           const SizedBox(height: 14),
           SizedBox(
@@ -441,7 +441,7 @@ class _StatsPageState extends State<StatsPage> {
                                 : (m.net == 0 ? 2 : (m.net / maxNet) * 92 + 2),
                             margin: const EdgeInsets.symmetric(horizontal: 3),
                             decoration: BoxDecoration(
-                              color: m.isEmpty ? const Color(0xFFEDEFED) : kSeed,
+                              color: m.isEmpty ? kBorder : kSeed,
                               borderRadius: const BorderRadius.vertical(
                                   top: Radius.circular(4)),
                             ),
@@ -452,8 +452,8 @@ class _StatsPageState extends State<StatsPage> {
                             style: TextStyle(
                               fontSize: 9.5,
                               color: m.isEmpty
-                                  ? const Color(0xFFC4C9C4)
-                                  : const Color(0xFF6B6F6B),
+                                  ? kTextFaint
+                                  : kTextMedium,
                             ),
                           ),
                         ],
@@ -473,13 +473,13 @@ class _StatsPageState extends State<StatsPage> {
                     SizedBox(
                       width: 40,
                       child: Text('${m.month} 月',
-                          style: const TextStyle(
-                              fontSize: 12, color: Color(0xFF6B6F6B))),
+                          style: TextStyle(
+                              fontSize: 12, color: kTextMedium)),
                     ),
                     if (_year == null)
                       Text('${m.times} 年',
-                          style: const TextStyle(
-                              fontSize: 11, color: Color(0xFFB0B5B0))),
+                          style: TextStyle(
+                              fontSize: 11, color: kTextHint)),
                     const Spacer(),
                     Text(
                       _year == null
@@ -492,10 +492,10 @@ class _StatsPageState extends State<StatsPage> {
                 ),
               ),
           if (_year != null)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 4),
               child: Text('点柱子可打开该月明细对比',
-                  style: TextStyle(fontSize: 10.5, color: Color(0xFFB0B5B0))),
+                  style: TextStyle(fontSize: 10.5, color: kTextHint)),
             ),
         ],
       ),
@@ -547,10 +547,10 @@ class _StatsPageState extends State<StatsPage> {
           ),
           const SizedBox(height: 8),
           if (list.isEmpty)
-            const Padding(
+            Padding(
               padding: EdgeInsets.symmetric(vertical: 10),
               child: Text('这个范围没有相关记录',
-                  style: TextStyle(fontSize: 12, color: Color(0xFFB0B5B0))),
+                  style: TextStyle(fontSize: 12, color: kTextHint)),
             ),
           for (final e in shown)
             Padding(
@@ -561,8 +561,8 @@ class _StatsPageState extends State<StatsPage> {
                     child: Text(e.key,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 13, color: Color(0xFF3A3F3A))),
+                        style: TextStyle(
+                            fontSize: 13, color: kTextBody)),
                   ),
                   SizedBox(
                     width: 46,
@@ -571,8 +571,8 @@ class _StatsPageState extends State<StatsPage> {
                           ? ''
                           : '${(e.value / total * 100).toStringAsFixed(1)}%',
                       textAlign: TextAlign.right,
-                      style: const TextStyle(
-                          fontSize: 10.5, color: Color(0xFFB0B5B0)),
+                      style: TextStyle(
+                          fontSize: 10.5, color: kTextHint),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -605,8 +605,8 @@ class _StatsPageState extends State<StatsPage> {
       return Container(
         padding: const EdgeInsets.all(20),
         decoration: cardDecoration(),
-        child: const Text('这个范围还没有记录',
-            style: TextStyle(fontSize: 13, color: Color(0xFF8A8F8A))),
+        child: Text('这个范围还没有记录',
+            style: TextStyle(fontSize: 13, color: kTextSecondary)),
       );
     }
     final total = rows.fold<int>(0, (s, e) => s + e.value);
@@ -624,7 +624,7 @@ class _StatsPageState extends State<StatsPage> {
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
               Text(formatCents(total),
-                  style: moneyStyle(size: 13, color: const Color(0xFF3A3F3A))),
+                  style: moneyStyle(size: 13, color: kTextBody)),
             ],
           ),
           const SizedBox(height: 10),
@@ -647,7 +647,7 @@ class _StatsPageState extends State<StatsPage> {
                           decoration: BoxDecoration(
                             color: row.key == state.currentEmployerId
                                 ? kSeed
-                                : const Color(0xFFD6DAD6),
+                                : kBorder,
                             borderRadius: BorderRadius.circular(2),
                           ),
                         ),
@@ -660,8 +660,8 @@ class _StatsPageState extends State<StatsPage> {
                                     : ''),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                fontSize: 13, color: Color(0xFF3A3F3A)),
+                            style: TextStyle(
+                                fontSize: 13, color: kTextBody),
                           ),
                         ),
                         Text(formatCents(row.value),
@@ -677,11 +677,11 @@ class _StatsPageState extends State<StatsPage> {
                         child: LinearProgressIndicator(
                           value: (row.value / maxNet).clamp(0.0, 1.0).toDouble(),
                           minHeight: 6,
-                          backgroundColor: const Color(0xFFEDEFED),
+                          backgroundColor: kBorder,
                           valueColor: AlwaysStoppedAnimation<Color>(
                             row.key == state.currentEmployerId
                                 ? kSeed
-                                : const Color(0xFFB9C5C0),
+                                : kTextFaint,
                           ),
                         ),
                       ),
@@ -691,8 +691,8 @@ class _StatsPageState extends State<StatsPage> {
               ),
             ),
           const SizedBox(height: 2),
-          const Text('点某一家可切换过去查看它的明细',
-              style: TextStyle(fontSize: 10.5, color: Color(0xFFB0B5B0))),
+          Text('点某一家可切换过去查看它的明细',
+              style: TextStyle(fontSize: 10.5, color: kTextHint)),
         ],
       ),
     );
@@ -725,7 +725,7 @@ class _StatsPageState extends State<StatsPage> {
                     width: 3,
                     height: 13,
                     decoration: BoxDecoration(
-                      color: const Color(0xFFB45309),
+                      color: kDeductionFg,
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -733,10 +733,10 @@ class _StatsPageState extends State<StatsPage> {
                   Expanded(
                       child: Text(e.key, style: const TextStyle(fontSize: 13))),
                   Text(formatCents(e.value),
-                      style: const TextStyle(
+                      style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
-                          color: Color(0xFFB45309))),
+                          color: kDeductionFg)),
                 ],
               ),
             ),

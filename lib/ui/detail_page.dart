@@ -26,8 +26,8 @@ class DetailPage extends StatelessWidget {
     if (record == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('记录详情')),
-        body: const Center(
-          child: Text('这条记录已被删除', style: TextStyle(color: Color(0xFF8A8F8A))),
+        body: Center(
+          child: Text('这条记录已被删除', style: TextStyle(color: kTextSecondary)),
         ),
       );
     }
@@ -59,7 +59,7 @@ class DetailPage extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
                     state.employerById(record.employerId)!.name,
-                    style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A)),
+                    style: TextStyle(fontSize: 11.5, color: kTextSecondary),
                   ),
                 ),
               ),
@@ -152,8 +152,8 @@ class DetailPage extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('备注',
-                      style: TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+                  Text('备注',
+                      style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
                   const SizedBox(height: 6),
                   Text(note, style: const TextStyle(fontSize: 13.5, height: 1.6)),
                 ],
@@ -184,7 +184,7 @@ class DetailPage extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
       decoration: BoxDecoration(
-        color: isExtra ? const Color(0xFF7A4B12) : kSeed,
+        color: isExtra ? kExtra : kSeed,
         borderRadius: BorderRadius.circular(18),
       ),
       child: Column(
@@ -284,8 +284,8 @@ class DetailPage extends StatelessWidget {
                       children: [
                         Flexible(
                           child: Text(item.name,
-                              style: const TextStyle(
-                                  fontSize: 13.5, color: Color(0xFF3A3F3A))),
+                              style: TextStyle(
+                                  fontSize: 13.5, color: kTextBody)),
                         ),
                         if (item.isDerived)
                           Container(
@@ -293,12 +293,12 @@ class DetailPage extends StatelessWidget {
                             padding:
                                 const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF2F4F2),
+                              color: kSurfaceAlt,
                               borderRadius: BorderRadius.circular(4),
                             ),
-                            child: const Text('推算',
+                            child: Text('推算',
                                 style: TextStyle(
-                                    fontSize: 9.5, color: Color(0xFF8A8F8A))),
+                                    fontSize: 9.5, color: kTextSecondary)),
                           ),
                       ],
                     ),
@@ -310,7 +310,7 @@ class DetailPage extends StatelessWidget {
                           : '× ${item.coefficient!.toStringAsFixed(2)}',
                       style: TextStyle(
                         fontSize: 13.5,
-                        color: item.coefficient == null ? const Color(0xFFB0B5B0) : kSeed,
+                        color: item.coefficient == null ? kTextHint : kSeed,
                         fontWeight: FontWeight.w500,
                       ),
                     )
@@ -321,8 +321,8 @@ class DetailPage extends StatelessWidget {
                         fontSize: 13.5,
                         fontWeight: item.isDerived ? FontWeight.w400 : FontWeight.w500,
                         color: item.isDerived
-                            ? const Color(0xFF8A8F8A)
-                            : (negative ? kDeduction : const Color(0xFF1B1C1B)),
+                            ? kTextSecondary
+                            : (negative ? kDeduction : kTextPrimary),
                       ),
                     ),
                 ],
@@ -334,7 +334,7 @@ class DetailPage extends StatelessWidget {
             child: Row(
               children: [
                 Text(sumLabel,
-                    style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+                    style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
                 const Spacer(),
                 Text(
                   formatCents(negative ? -sum : sum),
@@ -362,14 +362,14 @@ class DetailPage extends StatelessWidget {
                 width: 3,
                 height: 13,
                 decoration: BoxDecoration(
-                    color: const Color(0xFF9AA09A), borderRadius: BorderRadius.circular(2)),
+                    color: kTextHint, borderRadius: BorderRadius.circular(2)),
               ),
               const SizedBox(width: 8),
               const Text('信息项',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
-              const Text('不计入合计',
-                  style: TextStyle(fontSize: 11, color: Color(0xFF9AA09A))),
+              Text('不计入合计',
+                  style: TextStyle(fontSize: 11, color: kTextHint)),
             ],
           ),
           const SizedBox(height: 6),
@@ -382,14 +382,14 @@ class DetailPage extends StatelessWidget {
                   Expanded(
                     flex: 4,
                     child: Text(info.name,
-                        style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+                        style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
                   ),
                   Expanded(
                     flex: 5,
                     child: Text(
                       info.value.isEmpty ? '—' : info.value,
                       textAlign: TextAlign.right,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFF1B1C1B)),
+                      style: TextStyle(fontSize: 13, color: kTextPrimary),
                     ),
                   ),
                 ],
@@ -409,7 +409,7 @@ class DetailPage extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('原始工资条（${paths.length} 张）',
-              style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+              style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
           const SizedBox(height: 10),
           SizedBox(
             height: 80,
@@ -434,9 +434,9 @@ class DetailPage extends StatelessWidget {
                     errorBuilder: (_, __, ___) => Container(
                       width: 60,
                       height: 80,
-                      color: const Color(0xFFEDEFED),
-                      child: const Icon(Icons.broken_image_outlined,
-                          size: 18, color: Color(0xFFB0B5B0)),
+                      color: kBorder,
+                      child: Icon(Icons.broken_image_outlined,
+                          size: 18, color: kTextHint),
                     ),
                   ),
                 ),

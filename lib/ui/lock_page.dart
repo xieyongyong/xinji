@@ -101,7 +101,7 @@ class _LockPageState extends State<LockPage> {
               _error ?? '输入 PIN 解锁',
               style: TextStyle(
                 fontSize: 13,
-                color: _error != null ? kUp : const Color(0xFF8A8F8A),
+                color: _error != null ? kUp : kTextSecondary,
               ),
             ),
             const SizedBox(height: 24),
@@ -186,13 +186,13 @@ class _ForgotPinPageState extends State<ForgotPinPage> {
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.info_outline, size: 18, color: Color(0xFF9A6B00)),
+                Icon(Icons.info_outline, size: 18, color: kWarnIcon),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     '薪迹不联网、没有服务器，PIN 无法通过账号找回。'
                     '只能靠你设置时填的提示语重设。',
-                    style: const TextStyle(fontSize: 12.5, height: 1.5, color: Color(0xFF6B4E00)),
+                    style: TextStyle(fontSize: 12.5, height: 1.5, color: kWarnText),
                   ),
                 ),
               ],
@@ -200,7 +200,7 @@ class _ForgotPinPageState extends State<ForgotPinPage> {
           ),
           const SizedBox(height: 20),
           if (!_answerOk) ...[
-            const Text('你的提示语', style: TextStyle(fontSize: 13, color: Color(0xFF8A8F8A))),
+            Text('你的提示语', style: TextStyle(fontSize: 13, color: kTextSecondary)),
             const SizedBox(height: 6),
             Container(
               padding: const EdgeInsets.all(14),
@@ -234,7 +234,7 @@ class _ForgotPinPageState extends State<ForgotPinPage> {
               child: const Text('验证'),
             ),
           ] else ...[
-            const Text('设置新 PIN', style: TextStyle(fontSize: 13, color: Color(0xFF8A8F8A))),
+            Text('设置新 PIN', style: TextStyle(fontSize: 13, color: kTextSecondary)),
             const SizedBox(height: 6),
             TextField(
               controller: _pinCtrl,
@@ -410,7 +410,7 @@ class _SetupLockPageState extends State<SetupLockPage> {
                     ? '薪迹没有服务器，忘记 PIN 时只能靠这句提示找回'
                     : '工资数据比较敏感，解锁后才能查看',
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A), height: 1.5),
+                style: TextStyle(fontSize: 12.5, color: kTextSecondary, height: 1.5),
               ),
             ),
             const SizedBox(height: 20),
@@ -504,7 +504,7 @@ class _PinDots extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: filled ? kSeed : Colors.transparent,
-            border: Border.all(color: filled ? kSeed : const Color(0xFFCBD1CB), width: 1.5),
+            border: Border.all(color: filled ? kSeed : kTextFaint, width: 1.5),
           ),
         );
       }),
@@ -539,9 +539,9 @@ class _PinPad extends StatelessWidget {
               height: 58,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: kSurface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFFE9EBE9)),
+                border: Border.all(color: kBorder),
               ),
               child: Text(label, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500)),
             ),

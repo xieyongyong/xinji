@@ -55,14 +55,14 @@ class _ComparePageState extends State<ComparePage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.compare_arrows, size: 40, color: Color(0xFFC4C9C4)),
+                Icon(Icons.compare_arrows, size: 40, color: kTextFaint),
                 const SizedBox(height: 14),
                 Text(
                   available.isEmpty
                       ? '$_year 年还没有月度工资记录'
                       : '$_year 年只有一个月的数据，至少要两个月才能对比',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13.5, color: Color(0xFF8A8F8A), height: 1.6),
+                  style: TextStyle(fontSize: 13.5, color: kTextSecondary, height: 1.6),
                 ),
               ],
             ),
@@ -104,7 +104,7 @@ class _ComparePageState extends State<ComparePage> {
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(employerName,
-                      style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A))),
+                      style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
                 ),
               ),
       ),
@@ -132,10 +132,10 @@ class _ComparePageState extends State<ComparePage> {
               emptyHint: '两月扣款项目完全相同',
             ),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             '说明：金额变多与变少用不同颜色区分（红涨绿跌，可在设置里改配色）。'
             '扣款项变多意味着从工资里扣得更多。',
-            style: TextStyle(fontSize: 11, color: Color(0xFFB0B5B0), height: 1.5),
+            style: TextStyle(fontSize: 11, color: kTextHint, height: 1.5),
           ),
         ],
       ),
@@ -147,20 +147,20 @@ class _ComparePageState extends State<ComparePage> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A))),
+          Text(label, style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
           const SizedBox(height: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: kSurface,
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFE6E8E6)),
+              border: Border.all(color: kDivider),
             ),
             child: DropdownButton<int>(
               value: value,
               underline: const SizedBox.shrink(),
               isDense: true,
-              style: const TextStyle(fontSize: 14, color: Color(0xFF1B1C1B)),
+              style: TextStyle(fontSize: 14, color: kTextPrimary),
               items: available
                   .map((m) => DropdownMenuItem(
                         value: m.month,
@@ -179,9 +179,9 @@ class _ComparePageState extends State<ComparePage> {
         Expanded(
           child: dropdown('对比基准（早）', aMonth, (v) => setState(() => _monthA = v)),
         ),
-        const Padding(
+        Padding(
           padding: EdgeInsets.fromLTRB(10, 16, 10, 0),
-          child: Icon(Icons.arrow_forward, size: 18, color: Color(0xFFB0B5B0)),
+          child: Icon(Icons.arrow_forward, size: 18, color: kTextHint),
         ),
         Expanded(
           child: dropdown('对比月份（晚）', bMonth, (v) => setState(() => _monthB = v)),
@@ -196,9 +196,9 @@ class _ComparePageState extends State<ComparePage> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFFF2F5F3),
+        color: kSurfaceAlt,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE3E8E4)),
+        border: Border.all(color: kBorder),
       ),
       child: Row(
         children: [
@@ -231,12 +231,12 @@ class _ComparePageState extends State<ComparePage> {
             SizedBox(
               width: 62,
               child: Text(label,
-                  style: const TextStyle(fontSize: 12.5, color: Color(0xFF8A8F8A))),
+                  style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
             ),
             Expanded(
               child: Text(
                 '${formatCents(a)} → ${formatCents(b)}',
-                style: const TextStyle(fontSize: 13, color: Color(0xFF3A3F3A)),
+                style: TextStyle(fontSize: 13, color: kTextBody),
               ),
             ),
             Text(
@@ -294,7 +294,7 @@ class _ComparePageState extends State<ComparePage> {
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
               Text('${changed.length} 项变化',
-                  style: const TextStyle(fontSize: 11.5, color: Color(0xFF8A8F8A))),
+                  style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
             ],
           ),
           const SizedBox(height: 8),
@@ -302,7 +302,7 @@ class _ComparePageState extends State<ComparePage> {
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text(emptyHint,
-                  style: const TextStyle(fontSize: 12.5, color: Color(0xFFB0B5B0))),
+                  style: TextStyle(fontSize: 12.5, color: kTextHint)),
             ),
           for (final d in changed) _diffRow(d),
           if (unchanged.isNotEmpty) ...[
@@ -323,7 +323,7 @@ class _ComparePageState extends State<ComparePage> {
                       expanded
                           ? '收起无变化项目'
                           : '查看 ${unchanged.length} 项无变化项目',
-                      style: const TextStyle(fontSize: 11.8, color: kSeed),
+                      style: TextStyle(fontSize: 11.8, color: kSeed),
                     ),
                     Icon(expanded ? Icons.expand_less : Icons.expand_more,
                         size: 15, color: kSeed),
@@ -368,7 +368,7 @@ class _ComparePageState extends State<ComparePage> {
                   d.name,
                   style: TextStyle(
                     fontSize: 13,
-                    color: const Color(0xFF1B1C1B),
+                    color: kTextPrimary,
                     fontWeight: d.isNotable ? FontWeight.w600 : FontWeight.normal,
                   ),
                 ),
@@ -376,12 +376,12 @@ class _ComparePageState extends State<ComparePage> {
                   Text(
                     '${formatCents(d.aCents)} → ${formatCents(d.bCents)}'
                     '${d.changeRate != null ? '  ${(d.changeRate! * 100).toStringAsFixed(1)}%' : ''}',
-                    style: const TextStyle(fontSize: 10.5, color: Color(0xFF9AA09A)),
+                    style: TextStyle(fontSize: 10.5, color: kTextHint),
                   )
                 else
                   Text(
                     d.isNew ? '上月没有这项' : '这月没有这项',
-                    style: const TextStyle(fontSize: 10.5, color: Color(0xFF9AA09A)),
+                    style: TextStyle(fontSize: 10.5, color: kTextHint),
                   ),
               ],
             ),

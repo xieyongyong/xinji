@@ -312,13 +312,52 @@ class UpdateDownloadController extends ChangeNotifier {
   StreamSubscription<UpdateState>? _sub;
   bool _hidden = false;
 
+  // 用于估算下载速度与剩余时间（原生只给 received/total）
+  int _lastReceived = 0;
+  DateTime? _lastSampleAt;
+  int _bytesPerSec = 0;
+
   UpdateState get state => _state;
+
+  /// 当前下载速度（字节/秒），不足 1 秒时沿用上次采样
+  int get bytesPerSec => _bytesPerSec;
+
+  /// 按当前速度预估剩余秒数；没有可靠速度时返回 null
+  int? get remainingSeconds {
+    final speed = _bytesPerSec;
+    final s = _state;
+    if (speed <= 0 || s.total <= s.received) return null;
+    return ((s.total - s.received) / speed).round();
+  }
+
+  void _sampleSpeed(UpdateState s) {
+    final now = DateTime.now();
+    if (s.status != UpdateState.downloading) {
+      _lastSampleAt = null;
+      _lastReceived = 0;
+      return;
+    }
+    final last = _lastSampleAt;
+    if (last == null) {
+      _lastSampleAt = now;
+      _lastReceived = s.received;
+      return;
+    }
+    final dt = now.difference(last).inMilliseconds;
+    if (dt >= 1000) {
+      final delta = s.received - _lastReceived;
+      if (delta > 0) _bytesPerSec = (delta * 1000 / dt).round();
+      _lastSampleAt = now;
+      _lastReceived = s.received;
+    }
+  }
 
   /// 订阅原生状态流。可以重复调用，只会订阅一次。
   void attach() {
     if (_sub != null) return;
     _sub = UpdateChecker.updateStream.listen((s) {
       if (s.status != _state.status) _hidden = false;
+      _sampleSpeed(s);
       _state = s;
       notifyListeners();
     });

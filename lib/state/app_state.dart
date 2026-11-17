@@ -56,6 +56,11 @@ class AppState extends ChangeNotifier {
 
   bool loading = true;
 
+  /// 当前雇主名下的记录与年份：在 reload()/switchEmployer()/init() 时算好缓存，
+  /// 避免 getter 在首页 build 里被连调 4 次时每次都 where().toList()。
+  List<PayRecord> _scopedRecords = const [];
+  List<int> _years = const [];
+
   /// 上次备份时间（毫秒），用于首页提醒
   int? lastBackupAt;
 
@@ -94,15 +99,18 @@ class AppState extends ChangeNotifier {
     currentEmployerId = valid ? saved : employers.first.id;
   }
 
-  Future<void> reload() async {
+  Future<void> reload({bool rereadCurrentEmployer = false}) async {
     records = await recordDao.loadAll();
     templates = await templateDao.loadAll();
     salaryTemplates = await salaryTemplateDao.loadAll();
     employers = await employerDao.loadAll();
+    // 恢复备份后按 sp 里的最新值重选当前雇主（_restoreCurrentEmployer 自带有效性校验）
+    if (rereadCurrentEmployer) await _restoreCurrentEmployer();
     // 当前雇主被删了要兜住，否则所有筛选视图都会变成空白
     if (employers.isNotEmpty && !employers.any((e) => e.id == currentEmployerId)) {
       currentEmployerId = employers.first.id;
     }
+    _recomputeScoped();
     notifyListeners();
   }
 
@@ -123,16 +131,27 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  /// 当前雇主名下的记录（首页/年度/对比都只看这份）
-  List<PayRecord> get scopedRecords {
+  /// 当前雇主名下的记录（首页/年度/对比都只看这份）。返回 reload 时算好的缓存。
+  List<PayRecord> get scopedRecords => _scopedRecords;
+
+  /// records/employers/currentEmployerId 变化后重算缓存。所有写路径结尾都要调。
+  void _recomputeScoped() {
     final id = currentEmployer?.id;
-    if (id == null) return records;
-    return records.where((r) => r.employerId == id).toList();
+    _scopedRecords = id == null
+        ? List.unmodifiable(records)
+        : records.where((r) => r.employerId == id).toList(growable: false);
+    final set = _scopedRecords.map((e) => e.periodYear).toSet().toList();
+    set.sort((a, b) => b.compareTo(a));
+    if (set.isEmpty) set.add(DateTime.now().year);
+    final now = DateTime.now().year;
+    if (!set.contains(now)) set.insert(0, now);
+    _years = List.unmodifiable(set);
   }
 
   Future<void> switchEmployer(int id) async {
     if (currentEmployerId == id) return;
     currentEmployerId = id;
+    _recomputeScoped();
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setInt(_kCurrentEmployer, id);
@@ -194,16 +213,8 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------ 查询
 
-  /// 所有出现过的年份（倒序），用于年份切换。只统计当前雇主。
-  List<int> get years {
-    final set = scopedRecords.map((e) => e.periodYear).toSet().toList();
-    set.sort((a, b) => b.compareTo(a));
-    if (set.isEmpty) set.add(DateTime.now().year);
-    // 保证当年一定在列表里，方便录入新一年的数据
-    final now = DateTime.now().year;
-    if (!set.contains(now)) set.insert(0, now);
-    return set;
-  }
+  /// 所有出现过的年份（倒序），用于年份切换。只统计当前雇主。缓存字段。
+  List<int> get years => _years;
 
   List<PayRecord> recordsOfYear(int year) =>
       scopedRecords.where((e) => e.periodYear == year).toList();
