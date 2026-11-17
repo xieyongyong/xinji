@@ -42,8 +42,11 @@ class AppSettings extends ChangeNotifier {
   /// 深浅模式：0=跟随系统 1=浅色 2=深色
   int themeMode = 0;
 
-  ThemeMode get materialThemeMode =>
-      ThemeMode.values[themeMode.clamp(0, 2)];
+  ThemeMode get materialThemeMode {
+    if (themeMode == 1) return ThemeMode.light;
+    if (themeMode == 2) return ThemeMode.dark;
+    return ThemeMode.system;
+  }
 
   Color get upColor => Color(upColorValue);
   Color get downColor => Color(downColorValue);
@@ -69,7 +72,7 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> setSeedIndex(int v) async {
-    seedIndex = v.clamp(0, kSeedSchemes.length - 1);
+    seedIndex = v < 0 || v >= kSeedSchemes.length ? 0 : v;
     _syncPalette();
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
@@ -77,7 +80,7 @@ class AppSettings extends ChangeNotifier {
   }
 
   Future<void> setThemeMode(int v) async {
-    themeMode = v.clamp(0, 2);
+    themeMode = v < 0 || v > 2 ? 0 : v;
     _syncPalette();
     notifyListeners();
     final sp = await SharedPreferences.getInstance();

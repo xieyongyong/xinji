@@ -90,15 +90,16 @@ AppPalette get appPalette => _current;
 
 /// 由 AppSettings.load()/setter 调用，切换配色与深浅模式。
 void applyAppTheme({required int seedIndex, required ThemeMode mode, required Brightness platformBrightness}) {
-  final i = seedIndex.clamp(0, kSeedSchemes.length - 1);
+  final i = seedIndex < 0 || seedIndex >= kSeedSchemes.length ? 0 : seedIndex;
   final dark = mode == ThemeMode.dark ||
       (mode == ThemeMode.system && platformBrightness == Brightness.dark);
   _current = AppPalette(dark: dark, seed: kSeedSchemes[i].seed);
 }
 
-/// 按主色调生成 ThemeData。buildTheme() 保留无参版本给旧调用点兜底。
+/// 按主色调生成 ThemeData。
 ThemeData buildTheme({Brightness brightness = Brightness.light, int seedIndex = 0}) {
-  final seed = kSeedSchemes[seedIndex.clamp(0, kSeedSchemes.length - 1)].seed;
+  final i = seedIndex < 0 || seedIndex >= kSeedSchemes.length ? 0 : seedIndex;
+  final seed = kSeedSchemes[i].seed;
   final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
   final dark = brightness == Brightness.dark;
   final scaffold = dark ? const Color(0xFF121417) : const Color(0xFFF7F8F7);

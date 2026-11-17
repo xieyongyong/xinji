@@ -382,7 +382,11 @@ class _SettingsPageState extends State<SettingsPage> {
                 _item(
                   icon: Icons.brightness_6_outlined,
                   title: '深浅模式',
-                  subtitle: const ['跟随系统', '浅色', '深色'][settings.themeMode.clamp(0, 2)],
+                  subtitle: settings.themeMode == 1
+                      ? '浅色'
+                      : settings.themeMode == 2
+                          ? '深色'
+                          : '跟随系统',
                   trailing: const SizedBox.shrink(),
                   onTap: () => _pickThemeMode(context, settings),
                 ),
@@ -390,7 +394,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 _item(
                   icon: Icons.palette_outlined,
                   title: '主题配色',
-                  subtitle: '当前：${kSeedSchemes[settings.seedIndex.clamp(0, kSeedSchemes.length - 1)].name}',
+                  subtitle: '当前：${kSeedSchemes[settings.seedIndex < 0 || settings.seedIndex >= kSeedSchemes.length ? 0 : settings.seedIndex].name}',
                   trailing: const SizedBox.shrink(),
                   onTap: () => _pickSeed(context, settings),
                 ),
