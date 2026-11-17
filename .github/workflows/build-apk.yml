@@ -108,6 +108,10 @@ jobs:
             | awk '{split($4,p,"/"); s[p[2]]+=$1} END {for (k in s) printf "  %-14s %.1fMB\n", k, s[k]/1048576}' | sort
           echo "== onnxruntime / OpenCV =="
           unzip -l dist/xinji.apk | grep -E "libonnxruntime|libopencv_java" || echo "  （没有）"
+          echo "== 库自带 v4 旧模型（应为空）=="
+          unzip -l dist/xinji.apk | grep -E "ch_PP-OCRv4" || echo "  （已排除，好）"
+          echo "== 32 位 armeabi-v7a（应为空）=="
+          unzip -l dist/xinji.apk | grep -E "lib/armeabi-v7a/" || echo "  （已去掉，好）"
 
           # 模型没进包的话，装上就等于没有 PP-OCR，直接拦下来，别发出去
           if ! unzip -l dist/xinji.apk | grep -q "assets/ppocr/rec.onnx"; then
@@ -124,6 +128,16 @@ jobs:
           fi
           if ! unzip -l dist/xinji.apk | grep -q "libopencv_java"; then
             echo "::error::OpenCV 原生库没打进 APK（RapidOCR 依赖它做检测后处理）"
+            exit 1
+          fi
+
+          # 瘦身校验：旧模型 / 32 位库如果又混进来，说明排除规则失效，拦下来不发。
+          if unzip -l dist/xinji.apk | grep -q "ch_PP-OCRv4"; then
+            echo "::error::RapidOCR 自带的 v4 旧模型没排除掉，白白多占 14MB，检查 ignoreAssetsPattern"
+            exit 1
+          fi
+          if unzip -l dist/xinji.apk | grep -q "lib/armeabi-v7a/"; then
+            echo "::error::32 位 armeabi-v7a 库没去掉，检查 abiFilters"
             exit 1
           fi
 

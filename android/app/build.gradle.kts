@@ -43,19 +43,32 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
 
-        // 只打真机常见的两种 ARM 架构：ONNX Runtime + OpenCV 每个 ABI 的 so
-        // 加起来 40MB 上下，留 x86 只是让模拟器能跑，真机用不上，白占包体
+        // 只打 64 位 arm64-v8a：现在的新手机（含用户的 Android 11）都是 64 位，
+        // armeabi-v7a 是给 2015 年前的老机用的。去掉它能省 ~40MB——
+        // ONNX Runtime + OpenCV 每套 ABI 的 so 都很大，双 ABI 等于打包两份。
+        // 代价：32 位老手机装不了，但那些机器也跑不动 PP-OCRv6。
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            abiFilters.addAll(listOf("arm64-v8a"))
         }
+    }
+
+    androidResources {
+        // RapidOCR4j 的 AAR 自带 PP-OCRv4 的 det/rec 模型（约 14MB），我们用的是
+        // PP-OCRv6_small（assets/ppocr/ 下），这两个文件永远不会被加载。
+        //
+        // 关键：这些文件在 AAR 的 assets/ 里，走的是 mergeAssets 合并流程，
+        // packagingOptions.resources.excludes 管不到它——上一版就是这么漏进包的。
+        // 真正生效的是 ignoreAssetsPattern：它作用于 assets 合并阶段，
+        // 用「!文件名」表示排除。保留系统默认pattern并追加两条。
+        // cls 模型**不能排除**：库构造时无条件 new TextClassifier，就算 useCls=false
+        // 也要能加载到那个模型（只有 0.5MB，留着）。
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!ch_PP-OCRv4_det_infer.onnx:!ch_PP-OCRv4_rec_infer.onnx"
     }
 
     packagingOptions {
         resources {
-            // RapidOCR4j 的 AAR 自带 PP-OCRv4 的 det/rec 模型（约 15MB），
-            // 我们改用 PP-OCRv6_small（assets/ppocr/ 下），这两个文件用不上。
-            // 注意 cls 模型**不能排除**：库构造时无条件会 new TextClassifier，
-            // 就算 useCls=false 也要能加载到那个模型。
+            // 双保险：即使某些 AGP 版本下 assets 也走 resources.excludes，这里也拦一道。
+            // 真正起作用的是上面的 ignoreAssetsPattern。
             excludes += listOf(
                 "assets/ch_PP-OCRv4_det_infer.onnx",
                 "assets/ch_PP-OCRv4_rec_infer.onnx"
