@@ -77,11 +77,12 @@ xinji/
 │   ├── security/
 │   │   └── lock_service.dart         PIN 哈希、生物识别、提示语找回
 │   ├── backup/
-│   │   └── backup_service.dart       ZIP / AES 加密备份与恢复
+│   │   ├── backup_service.dart       ZIP / AES 加密备份与恢复
+│   │   └── cloud_backup.dart         WebDAV 云盘备份（可选，默认关闭）
 │   ├── state/
 │   │   └── app_state.dart            全局状态、OCR 流程编排
 │   └── ui/
-│       ├── theme.dart                主题与配色（涨红跌绿）
+│       ├── theme.dart                主题：5 套配色 + 深浅模式 + 语义色（涨红跌绿）
 │       ├── home_page.dart            首页：年份 + 月份卡片
 │       ├── import_page.dart          导入入口
 │       ├── review_page.dart          ★ 校对 / 新建 / 编辑（同一表单三用）
