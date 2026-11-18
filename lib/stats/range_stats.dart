@@ -87,8 +87,12 @@ class RangeSummary {
   List<PayRecord> get _extras =>
       _extrasCache ??= records.where((r) => r.recordType == kTypeExtra).toList();
 
-  int get monthlyNet => _monthlyNet ??= _monthly.fold(0, (s, r) => s + r.netCents);
-  int get extraNet => _extraNet ??= _extras.fold(0, (s, r) => s + r.netCents);
+  // 显式 fold<int>：??= 左侧是 int?，不指定的话 Dart 会把 fold 的泛型
+  // 推断成 int?，s + r.netCents 就报"可空类型不能相加"。
+  int get monthlyNet =>
+      _monthlyNet ??= _monthly.fold<int>(0, (s, r) => s + r.netCents);
+  int get extraNet =>
+      _extraNet ??= _extras.fold<int>(0, (s, r) => s + r.netCents);
 
   /// 有记录的月份数（同一个月多笔只算一个月）
   int get monthCount => _monthCount ??=
@@ -99,7 +103,9 @@ class RangeSummary {
   int get recordCount => records.length;
 
   /// 最早 / 最晚一笔的"年-月"标签，用来告诉用户这个总计覆盖到哪
-  String get periodLabel => _periodLabel ??= () {
+  String get periodLabel => _periodLabel ??= _buildPeriodLabel();
+
+  String _buildPeriodLabel() {
     if (records.isEmpty) return '';
     final keys = records.map((r) => r.periodYear * 100 + r.periodMonth).toList()
       ..sort();
@@ -108,7 +114,7 @@ class RangeSummary {
     final s = '${a ~/ 100}.${(a % 100).toString().padLeft(2, '0')}';
     final e = '${b ~/ 100}.${(b % 100).toString().padLeft(2, '0')}';
     return s == e ? s : '$s – $e';
-  }();
+  }
 
   /// 每个项目一共拿了多少（收入）
   List<MapEntry<String, int>> get incomeByItem =>
@@ -128,12 +134,13 @@ class RangeSummary {
         map[it.name] = (map[it.name] ?? 0) + it.amountCents;
       }
     }
-    final list = map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    return list;
+    return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
   }
 
   /// 按年份汇总（倒序）
-  List<YearAgg> get byYear => _byYear ??= () {
+  List<YearAgg> get byYear => _byYear ??= _buildByYear();
+
+  List<YearAgg> _buildByYear() {
     final groups = <int, List<PayRecord>>{};
     for (final r in records) {
       groups.putIfAbsent(r.periodYear, () => []).add(r);
@@ -144,21 +151,23 @@ class RangeSummary {
       final monthly = list.where((r) => r.recordType == kTypeMonthly).toList();
       return YearAgg(
         year: y,
-        net: list.fold(0, (s, r) => s + r.netCents),
-        gross: list.fold(0, (s, r) => s + r.grossCents),
-        deduction: list.fold(0, (s, r) => s + r.deductionCents),
-        monthlyNet: monthly.fold(0, (s, r) => s + r.netCents),
+        net: list.fold<int>(0, (s, r) => s + r.netCents),
+        gross: list.fold<int>(0, (s, r) => s + r.grossCents),
+        deduction: list.fold<int>(0, (s, r) => s + r.deductionCents),
+        monthlyNet: monthly.fold<int>(0, (s, r) => s + r.netCents),
         extraNet: list
             .where((r) => r.recordType == kTypeExtra)
-            .fold(0, (s, r) => s + r.netCents),
+            .fold<int>(0, (s, r) => s + r.netCents),
         recordCount: list.length,
         months: monthly.map((r) => r.periodMonth).toSet().length,
       );
     }).toList();
-  }();
+  }
 
   /// 1~12 月跨年合并：看"哪个月通常拿得多"，比单年曲线更能看出规律
-  List<MonthAgg> get byMonthOfYear => _byMonthOfYear ??= () {
+  List<MonthAgg> get byMonthOfYear => _byMonthOfYear ??= _buildByMonth();
+
+  List<MonthAgg> _buildByMonth() {
     final nets = List<int>.filled(13, 0);
     final gross = List<int>.filled(13, 0);
     final ded = List<int>.filled(13, 0);
@@ -183,25 +192,31 @@ class RangeSummary {
           deduction: ded[m],
         ),
     ];
-  }();
+  }
 
   /// 奖金按名目汇总
-  List<MapEntry<String, int>> get extraByLabel => _extraByLabel ??= () {
+  List<MapEntry<String, int>> get extraByLabel =>
+      _extraByLabel ??= _buildExtraByLabel();
+
+  List<MapEntry<String, int>> _buildExtraByLabel() {
     final map = <String, int>{};
     for (final r in _extras) {
       final label = (r.recordLabel ?? '其他收入').trim();
       map[label] = (map[label] ?? 0) + r.netCents;
     }
     return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-  }();
+  }
 
   /// 按雇主汇总（跨雇主的总计才用得上）
-  List<MapEntry<int, int>> get netByEmployer => _netByEmployer ??= () {
+  List<MapEntry<int, int>> get netByEmployer =>
+      _netByEmployer ??= _buildNetByEmployer();
+
+  List<MapEntry<int, int>> _buildNetByEmployer() {
     final map = <int, int>{};
     for (final r in records) {
       final id = r.employerId ?? -1;
       map[id] = (map[id] ?? 0) + r.netCents;
     }
     return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-  }();
+  }
 }

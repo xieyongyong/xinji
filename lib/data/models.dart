@@ -395,15 +395,17 @@ class ItemTemplate {
   bool matches(String rawName) {
     final candidates = nameVariants(rawName);
     if (candidates.isEmpty) return false;
-    final targets = _matchTargets ??= () {
-      final s = <String>{normalizeName(name)};
-      for (final a in aliases) {
-        final k = normalizeName(a);
-        if (k.isNotEmpty) s.add(k);
-      }
-      return s;
-    }();
+    final targets = _matchTargets ??= _buildMatchTargets();
     return candidates.any(targets.contains);
+  }
+
+  Set<String> _buildMatchTargets() {
+    final s = <String>{normalizeName(name)};
+    for (final a in aliases) {
+      final k = normalizeName(a);
+      if (k.isNotEmpty) s.add(k);
+    }
+    return s;
   }
 
   Map<String, Object?> toMap() => {
