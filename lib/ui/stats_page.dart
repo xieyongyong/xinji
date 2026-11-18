@@ -8,6 +8,7 @@ import '../state/app_state.dart';
 import '../stats/range_stats.dart';
 import 'compare_page.dart';
 import 'theme.dart';
+import 'year_picker.dart';
 
 /// 统计维度。用户嘴上说的"按维度看"，落到代码就是这四种切换：
 /// 年度（每年拿了多少）/ 月度（哪个月通常高）/ 项目（钱从哪来、扣在哪）/ 雇主（跳槽前后的对比）
@@ -73,6 +74,10 @@ class _StatsPageState extends State<StatsPage> {
         ? state.records
         : state.records.where((r) => r.periodYear == _year).toList();
 
+    // 年份弹窗里每年带实发数，顺便替代原来那排「全部 / 2026 年 / 2025 年」
+    // 横滑 chips —— 年份一多就得滚，还不知道哪年有数据。
+    final netByYear = _yearNetByYear(base);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('统计'),
@@ -90,7 +95,7 @@ class _StatsPageState extends State<StatsPage> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
         children: [
-          _scopeBar(years),
+          _scopeBar(years, netByYear),
           const SizedBox(height: 10),
           _overview(sum, state),
           const SizedBox(height: 14),
@@ -104,46 +109,67 @@ class _StatsPageState extends State<StatsPage> {
 
   // ------------------------------------------------------------ 范围选择
 
-  Widget _scopeBar(List<int> years) {
-    return SizedBox(
-      height: 36,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        children: [
-          _scopeChip('全部', _year == null, () => setState(() => _year = null)),
-          for (final y in years)
-            _scopeChip('$y 年', _year == y, () => setState(() => _year = y)),
-        ],
-      ),
-    );
-  }
+  Widget _scopeBar(List<int> years, Map<int, int> netByYear) {
+    final label = _year == null ? '全部年份' : '$_year 年';
+    // 只有一个年份时没什么可切，也让它可点（能顺手看到"全部"那一档）
+    final tappable = years.length > 1 || _year != null;
 
-  Widget _scopeChip(String text, bool selected, VoidCallback onTap) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GestureDetector(
-        onTap: onTap,
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: tappable ? () => _pickScope(years, netByYear) : null,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          alignment: Alignment.center,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
-            color: selected ? kSeed : Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: selected ? kSeed : kDivider,
-            ),
+            color: kSurface,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: kDivider),
           ),
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 13,
-              color: selected ? Colors.white : kTextMedium,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.event_outlined, size: 16, color: kTextSecondary),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w600,
+                  color: kTextPrimary,
+                ),
+              ),
+              if (tappable) ...[
+                const SizedBox(width: 2),
+                Icon(Icons.expand_more, size: 18, color: kTextHint),
+              ],
+            ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _pickScope(List<int> years, Map<int, int> netByYear) async {
+    final pick = await showYearPicker(
+      context,
+      years: years,
+      initial: _year,
+      allowAll: true,
+      netByYear: netByYear,
+      title: '统计范围',
+    );
+    // pick 为 null 是取消；pick.year 为 null 是选了「全部年份」，要区分开
+    if (pick != null && mounted) setState(() => _year = pick.year);
+  }
+
+  /// 每年实发合计（分），给年份弹窗做副标题
+  Map<int, int> _yearNetByYear(List<PayRecord> records) {
+    final out = <int, int>{};
+    for (final r in records) {
+      out[r.periodYear] = (out[r.periodYear] ?? 0) + r.netCents;
+    }
+    return out;
   }
 
   // ------------------------------------------------------------ 总览
@@ -467,21 +493,7 @@ class _StatsPageState extends State<StatsPage> {
           ),
           if (!showMerged && _year == null && years.length > 1) ...[
             const SizedBox(height: 10),
-            SizedBox(
-              height: 30,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  for (final y in years)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: _yearChip(y, y == chartYear, () {
-                        setState(() => _chartYear = y);
-                      }),
-                    ),
-                ],
-              ),
-            ),
+            _chartYearPicker(chartYear, years, s),
           ],
           const SizedBox(height: 12),
           if (showMerged)
@@ -494,22 +506,46 @@ class _StatsPageState extends State<StatsPage> {
     );
   }
 
-  Widget _yearChip(int year, bool selected, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected ? kSeed : kSurfaceAlt,
-          borderRadius: BorderRadius.circular(15),
-        ),
-        child: Text(
-          '$year',
-          style: TextStyle(
-            fontSize: 12,
-            color: selected ? Colors.white : kTextMedium,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+  /// 折线图看哪一年：点开弹窗选，跟对比页、统计范围共用一套选年手感。
+  /// 以前是一排年份 chip 横滑，年份多了要滚着找，也看不出哪年数据多少。
+  Widget _chartYearPicker(int year, List<int> years, RangeSummary s) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(15),
+        onTap: () async {
+          final pick = await showYearPicker(
+            context,
+            years: years,
+            initial: year,
+            netByYear: {for (final a in s.byYear) a.year: a.net},
+            title: '图表年份',
+          );
+          if (pick?.year != null && mounted) {
+            setState(() => _chartYear = pick!.year!);
+          }
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: kSurfaceAlt,
+            borderRadius: BorderRadius.circular(15),
+            border: Border.all(color: kDivider),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                '$year 年',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: kTextPrimary,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(Icons.expand_more, size: 16, color: kTextHint),
+            ],
           ),
         ),
       ),

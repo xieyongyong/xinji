@@ -20,6 +20,7 @@ import 'settings_page.dart';
 import 'theme.dart';
 import 'stats_page.dart';
 import 'update_dialog.dart';
+import 'year_picker.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -118,6 +119,15 @@ class _HomePageState extends State<HomePage> {
     }
     final year = _year;
     final summary = StatsBuilder.buildYear(state.scopedRecords, year);
+    // 年份弹窗里每年带一个实发数：光看年份号不知道哪年有数据、哪年多。
+    final netByYear = years.length > 1
+        ? {
+            for (final y in years)
+              y: y == year
+                  ? summary.totalNet
+                  : StatsBuilder.buildYear(state.scopedRecords, y).totalNet,
+          }
+        : const <int, int>{};
     final now = DateTime.now();
     final employer = state.currentEmployer;
     // 已经离职的雇主不该再提醒"这个月还没录入"
@@ -167,7 +177,7 @@ class _HomePageState extends State<HomePage> {
         children: [
           // 下载进度条已改成全局浮层（见 main.dart），切到任何页面都可见。
           if (state.employers.length > 1) _employerBar(state),
-          _yearBar(years, year),
+          _yearBar(years, year, netByYear),
           _summaryStrip(summary),
           if (stillActive && year == now.year && summary.months[now.month - 1].isEmpty)
             _missingBanner(now.month),
@@ -245,7 +255,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  Widget _yearBar(List<int> years, int year) {
+  Widget _yearBar(List<int> years, int year, Map<int, int> netByYear) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
       child: Row(
@@ -254,26 +264,50 @@ class _HomePageState extends State<HomePage> {
             icon: const Icon(Icons.chevron_left),
             onPressed: () => setState(() => _year = year - 1),
           ),
-          Text('$year 年', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+          // 年份本身可点：弹窗里一年一格、带该年实发，比原来那个
+          // 「右侧图标 → 弹出下拉菜单」的入口直观，也和多选月份的操作一致。
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: years.length > 1 ? () => _pickYear(years, year, netByYear) : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text('$year 年',
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.w600)),
+                  if (years.length > 1) ...[
+                    const SizedBox(width: 2),
+                    Icon(Icons.expand_more, size: 18, color: kTextHint),
+                  ],
+                ],
+              ),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.chevron_right),
             onPressed: year < DateTime.now().year
                 ? () => setState(() => _year = year + 1)
                 : null,
           ),
-          const Spacer(),
-          if (years.length > 1)
-            PopupMenuButton<int>(
-              tooltip: '切换年份',
-              icon: const Icon(Icons.unfold_more, size: 20),
-              onSelected: (y) => setState(() => _year = y),
-              itemBuilder: (_) => years
-                  .map((y) => PopupMenuItem(value: y, child: Text('$y 年')))
-                  .toList(),
-            ),
         ],
       ),
     );
+  }
+
+  Future<void> _pickYear(
+    List<int> years,
+    int year,
+    Map<int, int> netByYear,
+  ) async {
+    final pick = await showYearPicker(
+      context,
+      years: years,
+      initial: year,
+      netByYear: netByYear,
+    );
+    if (pick?.year != null && mounted) setState(() => _year = pick!.year!);
   }
 
   Widget _summaryStrip(YearSummary s) {
