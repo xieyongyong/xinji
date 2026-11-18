@@ -21,10 +21,14 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
   final _userCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
   final _cryptCtrl = TextEditingController();
-  WebDavConfig? _config;
   bool _busy = false;
   String? _status;
   DateTime? _remoteTime;
+
+  /// 密码框是否显示明文。网盘应用密码和备份密码都是随机串，
+  /// 看不见就很容易输错一位，重试半天还以为配置有问题。
+  bool _showPass = false;
+  bool _showCrypt = false;
 
   @override
   void initState() {
@@ -34,12 +38,14 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
 
   Future<void> _load() async {
     final cfg = await WebDavConfig.load();
+    final crypt = await CloudBackupSecrets.loadCryptPassword();
     if (!mounted) return;
     setState(() {
-      _config = cfg;
       _urlCtrl.text = cfg?.url ?? '';
       _userCtrl.text = cfg?.user ?? '';
-      // 密码不回填明文，让用户需要改时重新填
+      // 本机记住的密码直接回填：这是自己手机，每次重输既麻烦又容易错
+      _passCtrl.text = cfg?.password ?? '';
+      _cryptCtrl.text = crypt;
     });
     if (cfg != null) _checkRemote();
   }
@@ -57,19 +63,34 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       return;
     }
     await cfg.save();
-    setState(() => _config = cfg);
-    _toast('配置已保存（密码只存在本机）');
+    await CloudBackupSecrets.saveCryptPassword(_cryptCtrl.text);
+    _toast('配置已保存（密码只存在本机，下次自动带出）');
+  }
+
+  /// 忘掉密码：服务器地址和账号保留，只是不再自动填密码
+  Future<void> _forgetPasswords() async {
+    await WebDavConfig.forgetPassword();
+    await CloudBackupSecrets.clearCryptPassword();
+    if (!mounted) return;
+    setState(() {
+      _passCtrl.clear();
+      _cryptCtrl.clear();
+      _showPass = false;
+      _showCrypt = false;
+    });
+    _toast('已忘记本机保存的密码，下次需要重新输入');
   }
 
   Future<void> _clear() async {
     await WebDavConfig.clear();
+    await CloudBackupSecrets.clearCryptPassword();
     if (!mounted) return;
     setState(() {
-      _config = null;
       _remoteTime = null;
       _urlCtrl.clear();
       _userCtrl.clear();
       _passCtrl.clear();
+      _cryptCtrl.clear();
     });
     _toast('已清除云盘配置');
   }
@@ -127,6 +148,8 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       final service = BackupService(db);
       final bytes = await service.buildBytes(encrypted: true, password: pass);
       await client.upload(kCloudBackupName, bytes);
+      // 密码是对的才会走到这里，顺手记住，下次不用再输
+      await CloudBackupSecrets.saveCryptPassword(pass);
       if (!mounted) return;
       setState(() {
         _remoteTime = DateTime.now();
@@ -181,6 +204,8 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       final db = await AppDb.instance;
       final service = BackupService(db);
       await service.restoreBytes(bytes, password: pass);
+      // 恢复成功说明密码没问题，记住它
+      await CloudBackupSecrets.saveCryptPassword(pass);
       if (!mounted) return;
       // 偏好写回了 sp，重新加载让主题/开关/当前雇主立即生效
       await context.read<AppSettings>().load();
@@ -231,24 +256,44 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
               const SizedBox(height: 10),
               _field(_userCtrl, '账号', '你的 WebDAV 用户名'),
               const SizedBox(height: 10),
-              _field(_passCtrl, '密码 / 应用密码', '不是登录密码，是应用专用密码', obscure: true),
+              _field(
+                _passCtrl,
+                '密码 / 应用密码',
+                '不是登录密码，是应用专用密码',
+                obscure: true,
+                visible: _showPass,
+                onToggleVisibility: () => setState(() => _showPass = !_showPass),
+              ),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 10,
+                runSpacing: 4,
                 children: [
                   TextButton(onPressed: _busy ? null : _test, child: const Text('测试连接')),
                   TextButton(onPressed: _busy ? null : _save, child: const Text('保存配置')),
+                  TextButton(
+                      onPressed: _busy ? null : _forgetPasswords,
+                      child: const Text('忘记密码')),
                   TextButton(onPressed: _busy ? null : _clear, child: const Text('清除配置')),
                 ],
               ),
               const Divider(height: 24),
               _sectionTitle('备份密码'),
-              _field(_cryptCtrl, '备份加密密码', '至少 4 位，上传/恢复都要用', obscure: true),
+              _field(
+                _cryptCtrl,
+                '备份加密密码',
+                '至少 4 位，上传/恢复都要用',
+                obscure: true,
+                visible: _showCrypt,
+                onToggleVisibility: () => setState(() => _showCrypt = !_showCrypt),
+              ),
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8),
                 child: Text(
                   '云端存的是 AES-256 加密后的备份，密码只有你知道。'
-                  '换设备时用同一个密码恢复即可。',
+                  '换设备时用同一个密码恢复即可。\n'
+                  '这台手机上输入的密码会记住（存在本机、点眼睛可看明文），'
+                  '不用每次重输；点「忘记密码」可以清掉。',
                   style: TextStyle(fontSize: 12, height: 1.6),
                 ),
               ),
@@ -307,15 +352,27 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       );
 
   Widget _field(TextEditingController ctrl, String label, String hint,
-      {bool obscure = false}) {
+      {bool obscure = false,
+      bool visible = false,
+      VoidCallback? onToggleVisibility}) {
     return TextField(
       controller: ctrl,
-      obscureText: obscure,
+      obscureText: obscure && !visible,
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
         border: const OutlineInputBorder(),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        suffixIcon: onToggleVisibility == null
+            ? null
+            : IconButton(
+                tooltip: visible ? '隐藏密码' : '显示密码',
+                icon: Icon(
+                  visible ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                  size: 19,
+                ),
+                onPressed: onToggleVisibility,
+              ),
       ),
     );
   }

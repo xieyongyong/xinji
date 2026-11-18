@@ -13,13 +13,13 @@ import '../core/app_update.dart';
 import '../core/crash_log.dart';
 import '../data/db.dart';
 import '../data/models.dart';
+import '../data/salary_template.dart';
 import '../security/lock_service.dart';
 import '../state/app_state.dart';
 import 'cloud_backup_page.dart';
 import 'employer_page.dart';
 import 'lock_page.dart';
 import 'salary_template_page.dart';
-import 'theme.dart';
 import 'theme.dart';
 import 'update_dialog.dart';
 
@@ -450,15 +450,51 @@ class _SettingsPageState extends State<SettingsPage> {
                   ),
                   const Divider(height: 1),
                   _item(
+                    icon: Icons.timer_outlined,
+                    title: '切后台重新锁定',
+                    subtitle: settings.lockDelaySeconds == 0
+                        ? '切走立刻锁'
+                        : '离开超过 ${settings.lockDelayLabel} 后回来要重新验证',
+                    onTap: () => _pickLockDelay(context, settings),
+                  ),
+                  const Divider(height: 1),
+                  _item(
                     icon: Icons.lock_clock,
                     title: '立即锁定',
-                    subtitle: '切后台超过 30 秒也会自动锁定',
                     onTap: () {
                       lock.lockNow();
                       Navigator.of(context).popUntil((r) => r.isFirst);
                     },
                   ),
                 ],
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.privacyMask,
+                  onChanged: (v) => settings.setPrivacyMask(v),
+                  title: const Text('后台隐藏内容', style: TextStyle(fontSize: 14)),
+                  subtitle: Text(
+                    '切到后台时盖住整屏，最近任务里只看得到「内容已隐藏」，'
+                    '看不到工资明细。回到应用自动恢复。',
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  ),
+                  isThreeLine: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  secondary: Icon(Icons.visibility_off_outlined, size: 20, color: kTextBody),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  value: settings.hideAmounts,
+                  onChanged: (v) => settings.setHideAmounts(v),
+                  title: const Text('金额打码', style: TextStyle(fontSize: 14)),
+                  subtitle: Text(
+                    '首页、详情、统计里的金额显示成 ¥****，方便当着别人查数据时用。'
+                    '不影响导出备份和录入。',
+                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  ),
+                  isThreeLine: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  secondary: Icon(Icons.credit_card_off_outlined, size: 20, color: kTextBody),
+                ),
               ]),
               const SizedBox(height: 18),
               _sectionTitle('备份与恢复'),
@@ -819,10 +855,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
   /// 「录入与显示」里的模板摘要：一句话说清当前公司在用什么
   String _templateSummary(AppState state) {
-    final tpl = state.activeTemplateFor(state.currentEmployer?.id);
-    final count = state.salaryTemplatesOf(state.currentEmployer?.id).length;
-    if (tpl == null) return '未设置，录入时不会预填字段';
-    return '当前雇主 · $count 套，生效：${tpl.name}（${tpl.fields.length} 个字段）';
+    final id = state.currentEmployer?.id;
+    final count = state.salaryTemplatesOf(id).length;
+    if (count == 0) return '未设置，录入时不会预填字段';
+    final monthly = state.activeTemplateFor(id, appliesTo: kTplMonthly);
+    final extra = state.activeTemplateFor(id, appliesTo: kTplExtra);
+    return '共 $count 套 · 月度：${monthly?.name ?? '未设置'}'
+        ' · 奖金：${extra?.name ?? '未设置'}';
   }
 
   /// 配色方案的小色块，点一下直接切换，省得进二级页
@@ -855,6 +894,33 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       ),
     );
+  }
+
+  /// 选「切后台多久回来要重新验证」。0 秒 = 切走就锁。
+  Future<void> _pickLockDelay(BuildContext context, AppSettings settings) async {
+    final v = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('切后台重新锁定', style: TextStyle(fontSize: 15)),
+        children: [
+          for (final e in AppSettings.lockDelayOptions.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.of(ctx).pop(e.key),
+              child: Row(
+                children: [
+                  Text(e.value, style: const TextStyle(fontSize: 14)),
+                  const Spacer(),
+                  if (settings.lockDelaySeconds == e.key)
+                    Icon(Icons.check, size: 18, color: kSeed),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (v == null) return;
+    await settings.setLockDelay(v);
+    if (mounted) setState(() {});
   }
 
   Future<void> _pickThemeMode(BuildContext context, AppSettings settings) async {

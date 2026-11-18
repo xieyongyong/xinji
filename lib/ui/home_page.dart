@@ -273,7 +273,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  formatCents(s.totalNet),
+                  displayCents(s.totalNet),
                   style: moneyStyle(size: 24, color: Colors.white),
                 ),
               ],
@@ -282,9 +282,9 @@ class _HomePageState extends State<HomePage> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              _stripMini('工资', formatCents(s.totalMonthlyNet)),
+              _stripMini('工资', displayCents(s.totalMonthlyNet)),
               const SizedBox(height: 3),
-              _stripMini('奖金', formatCents(s.totalExtraNet)),
+              _stripMini('奖金', displayCents(s.totalExtraNet)),
             ],
           ),
         ],
@@ -391,7 +391,7 @@ class _HomePageState extends State<HomePage> {
                     const SizedBox(width: 8),
                   ],
                   Text(
-                    formatCents(m.totalNet),
+                    displayCents(m.totalNet),
                     style: moneyStyle(size: 17),
                   ),
                 ],
@@ -417,7 +417,7 @@ class _HomePageState extends State<HomePage> {
       children: [
         Icon(up ? Icons.arrow_upward : Icons.arrow_downward, size: 12, color: color),
         Text(
-          formatCents(delta.abs(), withSymbol: false),
+          displayCents(delta.abs(), withSymbol: false),
           style: TextStyle(fontSize: 11.5, color: color, fontWeight: FontWeight.w500),
         ),
       ],
@@ -462,7 +462,7 @@ class _HomePageState extends State<HomePage> {
             ],
             const SizedBox(width: 10),
             Text(
-              formatCents(r.netCents),
+              displayCents(r.netCents),
               style: TextStyle(
                 fontSize: 13.5,
                 color: kTextPrimary,

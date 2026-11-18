@@ -22,7 +22,14 @@ class SalaryTemplatePage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final list = state.salaryTemplatesOf(employerId);
+    final list = [...state.salaryTemplatesOf(employerId)]..sort((a, b) {
+        // 月度 → 奖金 → 通用，同类型里生效的排前面
+        int rank(String t) => t == kTplMonthly ? 0 : (t == kTplExtra ? 1 : 2);
+        final r = rank(a.appliesTo).compareTo(rank(b.appliesTo));
+        if (r != 0) return r;
+        if (a.isActive != b.isActive) return a.isActive ? -1 : 1;
+        return b.updatedAt.compareTo(a.updatedAt);
+      });
     final employer = state.employerById(employerId);
 
     return Scaffold(
@@ -47,14 +54,14 @@ class SalaryTemplatePage extends StatelessWidget {
             ),
             child: Text(
               employer == null
-                  ? '生效中的模板会决定两件事：\n'
-                      '· 手动录入时自动带出这些字段（金额留空由你填）\n'
-                      '· 识别工资条时，没识别到的字段也会按模板补出来'
+                  ? '模板按「适用类型」各自生效：\n'
+                      '· 月度工资 → 录工资条时预填这些字段\n'
+                      '· 奖金与其他 → 录年终奖/项目奖时用，不再套用月度字段\n'
+                      '· 通用 → 两类都能兜底（没建专属模板时用）'
                   : '这是「${employer.name}」的模板，只影响这家公司的录入预填。\n'
-                      '· 生效中的那套决定手动录入带出哪些字段\n'
-                      '· 识别工资条时，没识别到的字段也会按它补出来\n\n'
-                      '同一家公司换过工资条格式，就再建一套并设为生效；'
-                      '旧的那套留着，随时能切回来。',
+                      '· 「月度」和「奖金」各自有一套生效，互不干扰\n'
+                      '· 年终奖不会再用月度模板预填，避免塞进一堆 0 值绩效项\n'
+                      '· 同一类型换过工资条格式，就再建一套并设为生效，旧的留着随时切回',
               style: TextStyle(fontSize: 12, height: 1.7, color: kInfoText),
             ),
           ),
@@ -96,8 +103,25 @@ class SalaryTemplatePage extends StatelessWidget {
                   child: Text(t.name,
                       style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w600)),
                 ),
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: t.appliesTo == kTplExtra
+                        ? kExtraBg
+                        : (t.appliesTo == kTplAll ? kSurfaceAlt : kInfoBg),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    templateTypeLabel(t.appliesTo),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: t.appliesTo == kTplExtra ? kExtra : kInfoText,
+                    ),
+                  ),
+                ),
                 if (t.isActive) ...[
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
@@ -211,13 +235,22 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
   final List<TemplateField> _fields = [];
   bool _saving = false;
 
+  /// 适用类型：monthly / extra / all
+  late String _appliesTo;
+
+  /// 字段是否还是"复制来的初始内容"（用户没动过）。
+  /// 新建时切类型，只有没动过才允许整组换成本类型的模板字段。
+  bool _fieldsUntouched = false;
+
   bool get _isNew => widget.template == null;
 
   @override
   void initState() {
     super.initState();
     _nameCtrl = TextEditingController(text: widget.template?.name ?? '');
+    _appliesTo = widget.template?.appliesTo ?? widget.copyFrom?.appliesTo ?? kTplMonthly;
     final source = widget.template?.fields ?? widget.copyFrom?.fields ?? const [];
+    _fieldsUntouched = widget.template == null && source.isNotEmpty;
     _fields.addAll(source.map((f) => TemplateField(
           id: null,
           name: f.name,
@@ -225,6 +258,39 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
           valueType: f.valueType,
           sortOrder: f.sortOrder,
         )));
+  }
+
+  /// 切适用类型。
+  ///
+  /// 新建时如果字段还是复制来的、没动过，就顺手换成新类型的生效模板字段 ——
+  /// 建奖金模板时从月度模板拖一堆绩效字段过来，正是要避免的事。
+  Future<void> _changeAppliesTo(String v) async {
+    if (v == _appliesTo) return;
+    final state = context.read<AppState>();
+    var replaced = false;
+    if (_isNew && _fieldsUntouched) {
+      final tpl = state.activeTemplateFor(widget.employerId, appliesTo: v);
+      if (tpl != null && tpl.fields.isNotEmpty) {
+        _fields
+          ..clear()
+          ..addAll(tpl.fields.map((f) => TemplateField(
+                name: f.name,
+                category: f.category,
+                valueType: f.valueType,
+                sortOrder: f.sortOrder,
+              )));
+        replaced = true;
+      }
+    }
+    setState(() {
+      _appliesTo = v;
+      if (replaced) _fieldsUntouched = true;
+    });
+    if (replaced && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已换用${templateTypeLabel(v)}模板的字段，可继续调整')),
+      );
+    }
   }
 
   @override
@@ -246,6 +312,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
       } else {
         _fields[index] = result;
       }
+      _fieldsUntouched = false;
     });
   }
 
@@ -269,6 +336,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
       id: widget.template?.id,
       employerId: widget.template?.employerId ?? widget.employerId,
       name: name,
+      appliesTo: _appliesTo,
       isActive: widget.template?.isActive ?? false,
       createdAt: widget.template?.createdAt ?? 0,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
@@ -312,6 +380,47 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
                 border: OutlineInputBorder(),
                 isDense: true,
               ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: cardDecoration(),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('适用类型',
+                    style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Text(
+                  '月度工资和奖金各用各的，互不套用。拿不准就选「通用」。',
+                  style: TextStyle(fontSize: 11.5, color: kTextHint, height: 1.5),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    style: const ButtonStyle(
+                      visualDensity: VisualDensity.compact,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    segments: const [
+                      ButtonSegment(
+                          value: kTplMonthly,
+                          label: Text('月度工资', style: TextStyle(fontSize: 12))),
+                      ButtonSegment(
+                          value: kTplExtra,
+                          label: Text('奖金与其他', style: TextStyle(fontSize: 12))),
+                      ButtonSegment(
+                          value: kTplAll,
+                          label: Text('通用', style: TextStyle(fontSize: 12))),
+                    ],
+                    selected: {_appliesTo},
+                    onSelectionChanged: (s) => _changeAppliesTo(s.first),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 14),
@@ -391,7 +500,10 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
                   IconButton(
                     tooltip: '删除',
                     icon: const Icon(Icons.close, size: 16),
-                    onPressed: () => setState(() => _fields.remove(f)),
+                    onPressed: () => setState(() {
+                      _fields.remove(f);
+                      _fieldsUntouched = false;
+                    }),
                   ),
                 ],
               ),
@@ -423,7 +535,10 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
       ),
     );
     if (result == null || result.name.isEmpty) return;
-    setState(() => _fields.add(result));
+    setState(() {
+      _fields.add(result);
+      _fieldsUntouched = false;
+    });
   }
 }
 

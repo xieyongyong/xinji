@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ui/theme.dart';
+import 'money.dart';
 
 /// 全局用户偏好。
 ///
@@ -14,6 +15,9 @@ class AppSettings extends ChangeNotifier {
   static const _kDeWatermark = 'de_watermark';
   static const _kSeedIndex = 'theme_seed_index';
   static const _kThemeMode = 'theme_mode'; // 0=system 1=light 2=dark
+  static const _kPrivacyMask = 'privacy_mask';
+  static const _kLockDelay = 'lock_delay_seconds';
+  static const _kHideAmounts = 'hide_amounts';
 
   /// 绩效工资是否按「基本绩效 × 绩效系数」自动计算
   bool perfAuto = false;
@@ -42,6 +46,15 @@ class AppSettings extends ChangeNotifier {
   /// 深浅模式：0=跟随系统 1=浅色 2=深色
   int themeMode = 0;
 
+  /// 切后台时是否盖住整屏（最近任务里看不到工资内容）。默认开。
+  bool privacyMask = true;
+
+  /// 切后台多久回来要重新验证：0=立即，15/30/60/300 秒。
+  int lockDelaySeconds = 30;
+
+  /// 金额打码：把界面上的金额显示成 ¥****（不影响导出和录入）
+  bool hideAmounts = false;
+
   ThemeMode get materialThemeMode {
     if (themeMode == 1) return ThemeMode.light;
     if (themeMode == 2) return ThemeMode.dark;
@@ -60,9 +73,24 @@ class AppSettings extends ChangeNotifier {
     deWatermark = sp.getBool(_kDeWatermark) ?? true;
     seedIndex = sp.getInt(_kSeedIndex) ?? 0;
     themeMode = sp.getInt(_kThemeMode) ?? 0;
+    privacyMask = sp.getBool(_kPrivacyMask) ?? true;
+    lockDelaySeconds = sp.getInt(_kLockDelay) ?? 30;
+    hideAmounts = sp.getBool(_kHideAmounts) ?? false;
+    kMaskAmounts = hideAmounts;
     _syncPalette();
     notifyListeners();
   }
+
+  /// 「切后台重新锁定」的可选档位（秒）。0 表示切走就锁。
+  static const lockDelayOptions = <int, String>{
+    0: '立即锁定',
+    15: '15 秒',
+    30: '30 秒',
+    60: '1 分钟',
+    300: '5 分钟',
+  };
+
+  String get lockDelayLabel => lockDelayOptions[lockDelaySeconds] ?? '$lockDelaySeconds 秒';
 
   /// 把当前偏好同步给全局调色板（语义色 getter 从这里读）。
   /// platformBrightness 在 App 启动时用系统值；切模式后 MaterialApp 会 rebuild。
@@ -85,6 +113,28 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setInt(_kThemeMode, themeMode);
+  }
+
+  Future<void> setPrivacyMask(bool v) async {
+    privacyMask = v;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kPrivacyMask, v);
+  }
+
+  Future<void> setLockDelay(int seconds) async {
+    lockDelaySeconds = lockDelayOptions.containsKey(seconds) ? seconds : 30;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kLockDelay, lockDelaySeconds);
+  }
+
+  Future<void> setHideAmounts(bool v) async {
+    hideAmounts = v;
+    kMaskAmounts = v;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kHideAmounts, v);
   }
 
   Future<void> setCompressImages(bool v) async {

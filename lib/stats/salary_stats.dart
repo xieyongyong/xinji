@@ -44,6 +44,45 @@ class MonthSummary {
     }
     return map;
   }
+
+  /// 系数型项目（绩效系数 1.10…）。
+  ///
+  /// 它不是钱、不参与合计，但恰恰是"这个月绩效为什么少了"最直接的线索。
+  /// 以前对比页把它过滤掉了，用户只能看到绩效工资变了却不知道系数变没变。
+  Map<String, double> get coefficientItems {
+    final map = <String, double>{};
+    for (final r in monthly) {
+      for (final it in r.items) {
+        if (!it.isCoefficient || it.coefficient == null) continue;
+        map.putIfAbsent(it.name, () => it.coefficient!);
+      }
+    }
+    return map;
+  }
+
+  /// 推算型项目（基本绩效 = 实发绩效 ÷ 系数）。同样不是钱，但基数变了要看得见。
+  Map<String, int> get derivedItems {
+    final map = <String, int>{};
+    for (final r in monthly) {
+      for (final it in r.items) {
+        if (!it.isDerived) continue;
+        map[it.name] = it.amountCents;
+      }
+    }
+    return map;
+  }
+
+  /// 信息项（部门、薪级、应出勤天数…）。同月多笔时后一条非空值覆盖。
+  Map<String, String> get infoValues {
+    final map = <String, String>{};
+    for (final r in monthly) {
+      for (final i in r.infos) {
+        final v = i.value.trim();
+        if (v.isNotEmpty) map[i.name] = v;
+      }
+    }
+    return map;
+  }
 }
 
 /// 一年的汇总
@@ -146,6 +185,38 @@ class ItemDiff {
   }
 }
 
+/// 系数项对比（绩效系数 1.10 → 1.16）
+class CoefDiff {
+  final String name;
+  final double? a;
+  final double? b;
+
+  CoefDiff({required this.name, this.a, this.b});
+
+  bool get inA => a != null;
+  bool get inB => b != null;
+  bool get isNew => !inA && inB;
+  bool get isGone => inA && !inB;
+
+  double get diff => (b ?? 0) - (a ?? 0);
+  bool get changed => isNew || isGone || diff.abs() > 0.0001;
+}
+
+/// 信息项对比（部门 "研发一中心" → "研发二中心"）
+class InfoDiff {
+  final String name;
+  final String aValue;
+  final String bValue;
+
+  InfoDiff({required this.name, required this.aValue, required this.bValue});
+
+  bool get inA => aValue.trim().isNotEmpty;
+  bool get inB => bValue.trim().isNotEmpty;
+  bool get isNew => !inA && inB;
+  bool get isGone => inA && !inB;
+  bool get changed => aValue.trim() != bValue.trim();
+}
+
 /// 两个月对比
 class MonthComparison {
   final MonthSummary a;
@@ -153,11 +224,23 @@ class MonthComparison {
   final List<ItemDiff> incomeDiffs;
   final List<ItemDiff> deductionDiffs;
 
+  /// 系数（绩效系数等）
+  final List<CoefDiff> coefDiffs;
+
+  /// 推算值（基本绩效等），金额型展示
+  final List<ItemDiff> derivedDiffs;
+
+  /// 信息项
+  final List<InfoDiff> infoDiffs;
+
   MonthComparison({
     required this.a,
     required this.b,
     required this.incomeDiffs,
     required this.deductionDiffs,
+    this.coefDiffs = const [],
+    this.derivedDiffs = const [],
+    this.infoDiffs = const [],
   });
 
   int get grossDiff => b.monthlyGross - a.monthlyGross;
@@ -203,19 +286,65 @@ class StatsBuilder {
     return YearSummary(year: year, months: months);
   }
 
+  /// 把所有记录按「年-月」聚成可比较的期列表（跨年，从早到晚）。
+  ///
+  /// 对比页原来只能在一年内比，跨年（2025-12 ↔ 2026-01）根本选不出来。
+  /// 这里不再经过 [YearSummary]，直接按期间聚合。
+  static List<MonthSummary> buildPeriods(List<PayRecord> allRecords) {
+    final groups = <int, List<PayRecord>>{};
+    for (final r in allRecords) {
+      groups.putIfAbsent(r.periodYear * 100 + r.periodMonth, () => []).add(r);
+    }
+    final keys = groups.keys.toList()..sort();
+    return [
+      for (final k in keys)
+        MonthSummary(
+          year: k ~/ 100,
+          month: k % 100,
+          monthly:
+              groups[k]!.where((r) => r.recordType == kTypeMonthly).toList(),
+          extras: groups[k]!.where((r) => r.recordType == kTypeExtra).toList(),
+        ),
+    ];
+  }
+
   /// 两个月逐项对比（只比月度工资，奖金不掺进来）
   static MonthComparison compare(MonthSummary a, MonthSummary b) {
-    final aIncome = a.incomeItems;
-    final bIncome = b.incomeItems;
-    final aDed = a.deductionItems;
-    final bDed = b.deductionItems;
-
     return MonthComparison(
       a: a,
       b: b,
-      incomeDiffs: _diffMap(aIncome, bIncome),
-      deductionDiffs: _diffMap(aDed, bDed),
+      incomeDiffs: _diffMap(a.incomeItems, b.incomeItems),
+      deductionDiffs: _diffMap(a.deductionItems, b.deductionItems),
+      coefDiffs: _diffCoef(a.coefficientItems, b.coefficientItems),
+      derivedDiffs: _diffMap(a.derivedItems, b.derivedItems),
+      infoDiffs: _diffInfo(a.infoValues, b.infoValues),
     );
+  }
+
+  static List<CoefDiff> _diffCoef(Map<String, double> a, Map<String, double> b) {
+    final keys = <String>{...a.keys, ...b.keys};
+    final list = keys
+        .map((k) => CoefDiff(name: k, a: a[k], b: b[k]))
+        .toList();
+    // 有变化的排前面，变化大的更靠前
+    list.sort((x, y) {
+      if (x.changed != y.changed) return x.changed ? -1 : 1;
+      return y.diff.abs().compareTo(x.diff.abs());
+    });
+    return list;
+  }
+
+  static List<InfoDiff> _diffInfo(
+      Map<String, String> a, Map<String, String> b) {
+    final keys = <String>{...a.keys, ...b.keys};
+    final list = keys
+        .map((k) => InfoDiff(name: k, aValue: a[k] ?? '', bValue: b[k] ?? ''))
+        .toList();
+    list.sort((x, y) {
+      if (x.changed != y.changed) return x.changed ? -1 : 1;
+      return x.name.compareTo(y.name);
+    });
+    return list;
   }
 
   static List<ItemDiff> _diffMap(Map<String, int> a, Map<String, int> b) {

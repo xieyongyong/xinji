@@ -41,6 +41,12 @@ class _StatsPageState extends State<StatsPage> {
   StatsDimension _dim = StatsDimension.year;
   bool _showAllItems = false;
 
+  /// 月度维度：是否把不同年份的同一个月合并看（默认不合并，改按年折线）
+  bool _monthMerged = false;
+
+  /// 月度折线当前看哪一年（为空则取最近一年）
+  int? _chartYear;
+
   @override
   void initState() {
     super.initState();
@@ -171,7 +177,7 @@ class _StatsPageState extends State<StatsPage> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(formatCents(s.totalNet),
+          Text(displayCents(s.totalNet),
               style: moneyStyle(size: 30, color: Colors.white)),
           const SizedBox(height: 14),
           Row(
@@ -191,11 +197,11 @@ class _StatsPageState extends State<StatsPage> {
             const SizedBox(height: 9),
             Row(
               children: [
-                Text('应发 ${formatCents(s.totalGross)}',
+                Text('应发 ${displayCents(s.totalGross)}',
                     style: TextStyle(
                         fontSize: 11, color: Colors.white.withOpacity(0.8))),
                 const Spacer(),
-                Text('代扣 ${formatCents(s.totalDeduction)}',
+                Text('代扣 ${displayCents(s.totalDeduction)}',
                     style: TextStyle(
                         fontSize: 11, color: Colors.white.withOpacity(0.8))),
                 const Spacer(),
@@ -221,7 +227,7 @@ class _StatsPageState extends State<StatsPage> {
             style: TextStyle(
                 fontSize: 10.5, color: Colors.white.withOpacity(0.7))),
         const SizedBox(height: 3),
-        Text(formatCents(value),
+        Text(displayCents(value),
             style: const TextStyle(
                 fontSize: 13.5,
                 color: Colors.white,
@@ -323,7 +329,7 @@ class _StatsPageState extends State<StatsPage> {
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
               if (years.length > 1)
-                Text('总计 ${formatCents(s.totalNet)}',
+                Text('总计 ${displayCents(s.totalNet)}',
                     style: TextStyle(
                         fontSize: 11.5, color: kTextSecondary)),
             ],
@@ -365,7 +371,7 @@ class _StatsPageState extends State<StatsPage> {
                         SizedBox(
                           width: 96,
                           child: Text(
-                            formatCents(y.net),
+                            displayCents(y.net),
                             textAlign: TextAlign.right,
                             style: const TextStyle(
                                 fontSize: 12.5, fontWeight: FontWeight.w500),
@@ -376,8 +382,8 @@ class _StatsPageState extends State<StatsPage> {
                     Padding(
                       padding: const EdgeInsets.only(left: 52, top: 3),
                       child: Text(
-                        '${y.months} 个月 · 月均 ${formatCents(y.avgNet)}'
-                        '${y.extraNet > 0 ? ' · 含奖金 ${formatCents(y.extraNet)}' : ''}',
+                        '${y.months} 个月 · 月均 ${displayCents(y.avgNet)}'
+                        '${y.extraNet > 0 ? ' · 含奖金 ${displayCents(y.extraNet)}' : ''}',
                         style: TextStyle(
                             fontSize: 10.5, color: kTextHint),
                       ),
@@ -397,10 +403,26 @@ class _StatsPageState extends State<StatsPage> {
 
   // ------------------------------------------------------------ 月度
 
+  /// 月度维度。
+  ///
+  /// 默认**按年折线**：折线比柱子更容易看出"哪个月往下掉"。
+  /// 「跨年合并」是另一条路（把每年同一个月加在一起），因为它会把
+  /// 2025 和 2026 的 3 月叠成一个数，容易误读，所以不设默认，需要用户主动切。
   Widget _monthCard(RangeSummary s) {
-    final months = s.byMonthOfYear;
-    final maxNet = months.fold<int>(0, (m, e) => e.net > m ? e.net : m);
-    final hasData = maxNet > 0;
+    final years = s.byYear.map((e) => e.year).toList()..sort((a, b) => b.compareTo(a));
+    if (s.isEmpty || years.isEmpty) {
+      return Container(
+        padding: const EdgeInsets.all(20),
+        decoration: cardDecoration(),
+        child: Text('这个范围还没有数据',
+            style: TextStyle(fontSize: 13, color: kTextSecondary)),
+      );
+    }
+
+    final showMerged = _year == null && _monthMerged && years.length > 1;
+    final chartYear = _year ??
+        (_chartYear != null && years.contains(_chartYear) ? _chartYear! : years.first);
+    final net = _monthlyNetOf(s, chartYear);
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
@@ -408,105 +430,266 @@ class _StatsPageState extends State<StatsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(_year == null ? '各月累计（跨年合并）' : '$_year 年 · 月度实发',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-          const SizedBox(height: 4),
-          Text(
-            hasData
-                ? (_year == null
-                    ? '把每年的同一个月份加在一起，看长期规律'
-                    : '最高的一个月 ${formatCents(maxNet)}')
-                : '还没有数据',
-            style: TextStyle(fontSize: 11.5, color: kTextSecondary),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 140,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                for (final m in months)
-                  Expanded(
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: m.isEmpty
-                          ? null
-                          : () => _openMonth(m),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Container(
-                            height: maxNet == 0
-                                ? 2
-                                : (m.net == 0 ? 2 : (m.net / maxNet) * 92 + 2),
-                            margin: const EdgeInsets.symmetric(horizontal: 3),
-                            decoration: BoxDecoration(
-                              color: m.isEmpty ? kBorder : kSeed,
-                              borderRadius: const BorderRadius.vertical(
-                                  top: Radius.circular(4)),
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            '${m.month}',
-                            style: TextStyle(
-                              fontSize: 9.5,
-                              color: m.isEmpty
-                                  ? kTextFaint
-                                  : kTextMedium,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          const Divider(height: 22),
-          for (final m in months)
-            if (!m.isEmpty && (_year == null ? m.times > 1 : true))
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 40,
-                      child: Text('${m.month} 月',
-                          style: TextStyle(
-                              fontSize: 12, color: kTextMedium)),
-                    ),
-                    if (_year == null)
-                      Text('${m.times} 年',
-                          style: TextStyle(
-                              fontSize: 11, color: kTextHint)),
-                    const Spacer(),
-                    Text(
-                      _year == null
-                          ? '合计 ${formatCents(m.net)} · 平均 ${formatCents(m.avgNet)}'
-                          : formatCents(m.net),
-                      style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w500),
-                    ),
-                  ],
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  showMerged ? '各月累计（跨年合并）' : '$chartYear 年 · 月度实发',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
               ),
-          if (_year != null)
-            Padding(
-              padding: EdgeInsets.only(top: 4),
-              child: Text('点柱子可打开该月明细对比',
-                  style: TextStyle(fontSize: 10.5, color: kTextHint)),
+              if (_year == null && years.length > 1)
+                SegmentedButton<bool>(
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11.5)),
+                  ),
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('折线')),
+                    ButtonSegment(value: true, label: Text('合并')),
+                  ],
+                  selected: {_monthMerged},
+                  onSelectionChanged: (v) =>
+                      setState(() => _monthMerged = v.first),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            showMerged
+                ? '把每年的同一个月份加在一起看长期规律（会叠加不同年份）'
+                : '点数据点可打开该月与上月的逐项对比',
+            style: TextStyle(fontSize: 11.5, color: kTextSecondary),
+          ),
+          if (!showMerged && _year == null && years.length > 1) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 30,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  for (final y in years)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: _yearChip(y, y == chartYear, () {
+                        setState(() => _chartYear = y);
+                      }),
+                    ),
+                ],
+              ),
             ),
+          ],
+          const SizedBox(height: 12),
+          if (showMerged)
+            _mergedBars(s)
+          else
+            _lineChart(chartYear, net),
+          if (!showMerged) _lineSummary(net),
         ],
       ),
     );
   }
 
-  void _openMonth(MonthAgg m) {
-    final y = _year;
-    if (y == null) return;
+  Widget _yearChip(int year, bool selected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected ? kSeed : kSurfaceAlt,
+          borderRadius: BorderRadius.circular(15),
+        ),
+        child: Text(
+          '$year',
+          style: TextStyle(
+            fontSize: 12,
+            color: selected ? Colors.white : kTextMedium,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 某一年 12 个月的月度实发（分）。`has[i]` 表示这个月有没有记录。
+  ({List<int> values, List<bool> has}) _monthlyNetOf(RangeSummary s, int year) {
+    final values = List<int>.filled(12, 0);
+    final has = List<bool>.filled(12, false);
+    for (final r in s.records) {
+      if (r.recordType != kTypeMonthly || r.periodYear != year) continue;
+      final m = r.periodMonth;
+      if (m < 1 || m > 12) continue;
+      values[m - 1] += r.netCents;
+      has[m - 1] = true;
+    }
+    return (values: values, has: has);
+  }
+
+  Widget _lineChart(int year, ({List<int> values, List<bool> has}) data) {
+    return SizedBox(
+      height: 172,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _MonthLinePainter(
+                values: data.values,
+                has: data.has,
+                line: kSeed,
+                grid: kDivider,
+                label: kTextHint,
+                dotBg: kSurface,
+                masked: kMaskAmounts,
+              ),
+            ),
+          ),
+          // 透明点击区，精确到每个月：点 3 月就打开 3 月对比
+          Positioned(
+            left: _MonthLinePainter.leftPad,
+            right: _MonthLinePainter.rightPad,
+            top: _MonthLinePainter.topPad,
+            bottom: _MonthLinePainter.bottomPad,
+            child: Row(
+              children: [
+                for (var m = 0; m < 12; m++)
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: data.has[m]
+                          ? () => _openPeriod(year, m + 1)
+                          : null,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 折线下方的三个关键数字
+  Widget _lineSummary(({List<int> values, List<bool> has}) data) {
+    var maxMonth = -1;
+    var maxVal = 0;
+    var sum = 0;
+    var count = 0;
+    for (var i = 0; i < 12; i++) {
+      if (!data.has[i]) continue;
+      count++;
+      sum += data.values[i];
+      if (data.values[i] > maxVal) {
+        maxVal = data.values[i];
+        maxMonth = i + 1;
+      }
+    }
+    final avg = count == 0 ? 0 : (sum / count).round();
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: _miniStat('最高',
+                maxMonth > 0 ? '${maxMonth}月 ${displayCents(maxVal)}' : '—'),
+          ),
+          Expanded(child: _miniStat('月均', displayCents(avg))),
+          Expanded(child: _miniStat('有记录', '$count 个月')),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniStat(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 10.5, color: kTextHint)),
+        const SizedBox(height: 2),
+        Text(value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+      ],
+    );
+  }
+
+  /// 跨年合并：原来的柱状视图（把每年同月加总）
+  Widget _mergedBars(RangeSummary s) {
+    final months = s.byMonthOfYear;
+    final maxNet = months.fold<int>(0, (m, e) => e.net > m ? e.net : m);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          height: 140,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              for (final m in months)
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      Container(
+                        height: maxNet == 0
+                            ? 2
+                            : (m.net == 0 ? 2 : (m.net / maxNet) * 92 + 2),
+                        margin: const EdgeInsets.symmetric(horizontal: 3),
+                        decoration: BoxDecoration(
+                          color: m.isEmpty ? kBorder : kSeed,
+                          borderRadius:
+                              const BorderRadius.vertical(top: Radius.circular(4)),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${m.month}',
+                        style: TextStyle(
+                          fontSize: 9.5,
+                          color: m.isEmpty ? kTextFaint : kTextMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const Divider(height: 22),
+        for (final m in months)
+          if (!m.isEmpty && m.times > 1)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 44,
+                    child: Text('${m.month} 月',
+                        style: TextStyle(fontSize: 12, color: kTextMedium)),
+                  ),
+                  Text('${m.times} 年',
+                      style: TextStyle(fontSize: 11, color: kTextHint)),
+                  const Spacer(),
+                  Text(
+                    '合计 ${displayCents(m.net)} · 平均 ${displayCents(m.avgNet)}',
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    );
+  }
+
+  void _openPeriod(int year, int month) {
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ComparePage(year: y, focusMonth: m.month)),
+      MaterialPageRoute(builder: (_) => ComparePage(year: year, focusMonth: month)),
     );
   }
 
@@ -538,7 +721,7 @@ class _StatsPageState extends State<StatsPage> {
                   style: const TextStyle(
                       fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text(formatCents(total),
+              Text(displayCents(total),
                   style: TextStyle(
                       fontSize: 12.5,
                       fontWeight: FontWeight.w500,
@@ -578,7 +761,7 @@ class _StatsPageState extends State<StatsPage> {
                   const SizedBox(width: 8),
                   SizedBox(
                     width: 92,
-                    child: Text(formatCents(e.value),
+                    child: Text(displayCents(e.value),
                         textAlign: TextAlign.right,
                         style: const TextStyle(
                             fontSize: 12.5, fontWeight: FontWeight.w500)),
@@ -623,7 +806,7 @@ class _StatsPageState extends State<StatsPage> {
               const Text('按雇主',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text(formatCents(total),
+              Text(displayCents(total),
                   style: moneyStyle(size: 13, color: kTextBody)),
             ],
           ),
@@ -664,7 +847,7 @@ class _StatsPageState extends State<StatsPage> {
                                 fontSize: 13, color: kTextBody),
                           ),
                         ),
-                        Text(formatCents(row.value),
+                        Text(displayCents(row.value),
                             style: const TextStyle(
                                 fontSize: 12.5, fontWeight: FontWeight.w500)),
                       ],
@@ -732,7 +915,7 @@ class _StatsPageState extends State<StatsPage> {
                   const SizedBox(width: 8),
                   Expanded(
                       child: Text(e.key, style: const TextStyle(fontSize: 13))),
-                  Text(formatCents(e.value),
+                  Text(displayCents(e.value),
                       style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
@@ -744,4 +927,134 @@ class _StatsPageState extends State<StatsPage> {
       ),
     );
   }
+}
+
+/// 月度折线图（自绘，不引入图表库）。
+///
+/// 只画 12 个点，不做缩放/滑动：工资条一年就 12 个月，
+/// 一屏看得完，比任何可交互图表都直观。
+class _MonthLinePainter extends CustomPainter {
+  static const double leftPad = 46;
+  static const double rightPad = 10;
+  static const double topPad = 12;
+  static const double bottomPad = 22;
+
+  final List<int> values;
+  final List<bool> has;
+  final Color line;
+  final Color grid;
+  final Color label;
+  final Color dotBg;
+
+  /// 开了「金额打码」时，纵轴刻度也不显示具体数值
+  final bool masked;
+
+  _MonthLinePainter({
+    required this.values,
+    required this.has,
+    required this.line,
+    required this.grid,
+    required this.label,
+    required this.dotBg,
+    this.masked = false,
+  });
+
+  static String _short(int cents) {
+    final yuan = cents / 100;
+    if (yuan.abs() >= 10000) return '${(yuan / 10000).toStringAsFixed(1)}万';
+    return yuan.toStringAsFixed(0);
+  }
+
+  void _text(Canvas canvas, String s, Offset at,
+      {bool center = false, bool right = false}) {
+    final tp = TextPainter(
+      text: TextSpan(
+          text: s, style: TextStyle(fontSize: 9.5, color: label)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    var dx = at.dx;
+    if (center) dx -= tp.width / 2;
+    if (right) dx -= tp.width;
+    tp.paint(canvas, Offset(dx, at.dy));
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final w = size.width - leftPad - rightPad;
+    final h = size.height - topPad - bottomPad;
+    if (w <= 0 || h <= 0) return;
+
+    final maxV = values.fold<int>(0, (m, v) => v > m ? v : m);
+    final maxY = maxV <= 0 ? 100 : (maxV * 1.15).round();
+
+    final gridPaint = Paint()
+      ..color = grid
+      ..strokeWidth = 1;
+
+    // 三条横线 + 左侧刻度
+    for (var i = 0; i <= 2; i++) {
+      final y = topPad + h * (1 - i / 2);
+      canvas.drawLine(
+          Offset(leftPad, y), Offset(size.width - rightPad, y), gridPaint);
+      _text(canvas, masked ? '—' : _short((maxY * i) ~/ 2),
+          Offset(leftPad - 6, y - 6),
+          right: true);
+    }
+
+    // X 轴月份
+    for (var m = 0; m < 12; m++) {
+      final x = leftPad + w * (m + 0.5) / 12;
+      _text(canvas, '${m + 1}', Offset(x, size.height - bottomPad + 5),
+          center: true);
+    }
+
+    Offset pos(int m) {
+      final ratio = maxY == 0 ? 0.0 : values[m] / maxY;
+      return Offset(leftPad + w * (m + 0.5) / 12, topPad + h * (1 - ratio));
+    }
+
+    // 折线：只连相邻且有记录的月份，避免跨过空月画出假趋势
+    final path = Path();
+    int? prev;
+    for (var m = 0; m < 12; m++) {
+      if (!has[m]) {
+        prev = null;
+        continue;
+      }
+      final p = pos(m);
+      if (prev == m - 1) {
+        path.lineTo(p.dx, p.dy);
+      } else {
+        path.moveTo(p.dx, p.dy);
+      }
+      prev = m;
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = line
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // 数据点（空心圆，压在折线上看得清）
+    for (var m = 0; m < 12; m++) {
+      if (!has[m]) continue;
+      final p = pos(m);
+      canvas.drawCircle(p, 4.5, Paint()..color = dotBg);
+      canvas.drawCircle(p, 3.2, Paint()..color = line);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _MonthLinePainter old) =>
+      old.values != values ||
+      old.has != has ||
+      old.line != line ||
+      old.grid != grid ||
+      old.label != label ||
+      old.dotBg != dotBg ||
+      old.masked != masked;
 }

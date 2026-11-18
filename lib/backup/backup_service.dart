@@ -52,12 +52,15 @@ class BackupService {
     'perf_auto',
     'compress_images',
     'de_watermark',
+    'privacy_mask',
+    'hide_amounts',
   ];
   static const _prefIntKeys = [
     'color_up',
     'color_down',
     'theme_seed_index',
     'theme_mode',
+    'lock_delay_seconds',
     'current_employer_id',
   ];
 
@@ -295,7 +298,8 @@ class BackupService {
         await txn.delete('salary_template');
         for (final st in salaryTemplates) {
           await txn.insert('salary_template', _sanitize(st, const {
-            'id', 'employer_id', 'name', 'is_active', 'created_at', 'updated_at',
+            'id', 'employer_id', 'name', 'applies_to', 'is_active', 'created_at',
+            'updated_at',
           }));
         }
         for (final tf in templateFields) {

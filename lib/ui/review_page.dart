@@ -121,6 +121,10 @@ class _ReviewPageState extends State<ReviewPage> {
   /// 同一个页面里必须始终用同一套顺序，否则改一项就整体重排。
   SalaryTemplate? _template;
 
+  /// 由模板自动补出来的空字段（记下名字，切换类型时能干净地撤掉）
+  final Set<String> _prefilledItems = {};
+  final Set<String> _prefilledInfos = {};
+
   bool get _isEdit => widget.editing != null;
 
   /// 工资条标题上认出来的年月（识别不到为 false）
@@ -215,9 +219,10 @@ class _ReviewPageState extends State<ReviewPage> {
       }
     }
 
-    // 3) 按「这家雇主的发薪模板」补齐字段
-    //    新建：整份预填；OCR：只补识别没覆盖到的，已识别的值优先
-    final tpl = appState.activeTemplateFor(_employerId);
+    // 3) 按「这家雇主 + 这种记录类型」的模板补齐字段。
+    //    奖金记录绝不拿月度模板预填 —— 那些绩效/社保项会被塞成 0，
+    //    看起来像"这个月绩效没发"。
+    final tpl = appState.activeTemplateFor(_employerId, appliesTo: _recordType);
     _template = tpl;
     if (editing == null && tpl != null) {
       _prefillFromTemplate(tpl, onlyMissing: widget.outcome != null);
@@ -263,6 +268,7 @@ class _ReviewPageState extends State<ReviewPage> {
         amountCents: 0,
         coefficient: null,
       ));
+      _prefilledItems.add(normalizeName(f.name));
     }
 
     final existInfo = _infos.map((e) => normalizeName(e.name)).toSet();
@@ -274,7 +280,38 @@ class _ReviewPageState extends State<ReviewPage> {
       if (covered) continue;
       _infos.add(PayInfo(name: f.name, value: ''));
       existInfo.add(key);
+      _prefilledInfos.add(key);
     }
+  }
+
+  /// 页面内切换「工资 / 奖金」时换模板。
+  ///
+  /// 只撤掉"模板自动补出来的空项"，用户自己填的值一个都不动；
+  /// 新类型有专属模板就补上它的字段。这是奖金条不被月度字段污染的关键。
+  void _onRecordTypeChanged(String v) {
+    if (v == _recordType) return;
+    final appState = context.read<AppState>();
+    setState(() {
+      if (!_isEdit) {
+        _items.removeWhere((e) =>
+            _prefilledItems.contains(normalizeName(e.name)) &&
+            e.amountCents == 0 &&
+            e.coefficient == null);
+        _infos.removeWhere((i) =>
+            _prefilledInfos.contains(normalizeName(i.name)) &&
+            i.value.trim().isEmpty);
+      }
+      _prefilledItems.clear();
+      _prefilledInfos.clear();
+      _recordType = v;
+      final tpl = appState.activeTemplateFor(_employerId, appliesTo: v);
+      _template = tpl;
+      if (!_isEdit && tpl != null) {
+        _prefillFromTemplate(tpl, onlyMissing: true);
+        _normalizeOrder();
+        _applyPerfFormula();
+      }
+    });
   }
 
   // ------------------------------------------------------------ 绩效公式
@@ -984,7 +1021,7 @@ class _ReviewPageState extends State<ReviewPage> {
                           label: Text('奖金', style: TextStyle(fontSize: 12))),
                     ],
                     selected: {_recordType},
-                    onSelectionChanged: (s) => setState(() => _recordType = s.first),
+                    onSelectionChanged: (s) => _onRecordTypeChanged(s.first),
                   ),
                 ),
               ],

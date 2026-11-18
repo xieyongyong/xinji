@@ -36,7 +36,8 @@ class DetailPage extends StatelessWidget {
     // 为什么两者都要：sort_order 保证"录入时怎么排就怎么存"，
     // 这里再按模板排一次，是为了让升级前录入的老记录、以及后来调整过模板的记录
     // 也和最近几个月的顺序对齐 —— 用户看到的永远是同一套顺序。
-    final tpl = state.activeTemplateFor(record.employerId);
+    // 按记录自己的类型取模板：奖金记录用奖金模板的顺序，不被月度模板重排
+    final tpl = state.activeTemplateFor(record.employerId, appliesTo: record.recordType);
     final incomes =
         orderItemsByTemplate(record.items.where((e) => e.isIncome).toList(), tpl);
     final deductions =
@@ -212,7 +213,7 @@ class DetailPage extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            formatCents(r.netCents),
+            displayCents(r.netCents),
             style: moneyStyle(size: 32, color: Colors.white),
           ),
           const SizedBox(height: 2),
@@ -221,9 +222,9 @@ class DetailPage extends StatelessWidget {
           const SizedBox(height: 14),
           Row(
             children: [
-              _miniStat('应发', formatCents(r.grossCents)),
+              _miniStat('应发', displayCents(r.grossCents)),
               const SizedBox(width: 22),
-              _miniStat('代扣', formatCents(r.deductionCents)),
+              _miniStat('代扣', displayCents(r.deductionCents)),
             ],
           ),
         ],
@@ -316,7 +317,7 @@ class DetailPage extends StatelessWidget {
                     )
                   else
                     Text(
-                      formatCents(negative ? -item.amountCents : item.amountCents),
+                      displayCents(negative ? -item.amountCents : item.amountCents),
                       style: TextStyle(
                         fontSize: 13.5,
                         fontWeight: item.isDerived ? FontWeight.w400 : FontWeight.w500,
@@ -337,7 +338,7 @@ class DetailPage extends StatelessWidget {
                     style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
                 const Spacer(),
                 Text(
-                  formatCents(negative ? -sum : sum),
+                  displayCents(negative ? -sum : sum),
                   style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
                 ),
               ],

@@ -86,6 +86,18 @@ bool looksLikeAmount(String raw) {
   return t.replaceAll(RegExp(r'[^\d]'), '').length >= 3;
 }
 
+/// 界面上是否把金额打码（设置里的"金额打码"）。
+///
+/// 只影响**显示**：导出 CSV、备份、表单输入仍走 [formatCents]，
+/// 否则打码一开，导出的备份就全是星号了。
+bool kMaskAmounts = false;
+
+/// 界面显示金额的统一入口。
+String displayCents(int cents, {bool withSymbol = true, bool withSign = false}) {
+  if (kMaskAmounts) return withSymbol ? '¥****' : '****';
+  return formatCents(cents, withSymbol: withSymbol, withSign: withSign);
+}
+
 /// 分 -> 展示文本。`1234567` => `¥12,345.67`
 String formatCents(int cents, {bool withSymbol = true, bool withSign = false}) {
   final negative = cents < 0;

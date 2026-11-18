@@ -1,5 +1,19 @@
 import 'models.dart';
 
+/// 模板适用类型。工资条和年终奖的字段结构差异很大：
+/// 月度有绩效系数、社保公积金，奖金条通常只有「奖金金额 + 个税」。
+/// 不区分的后果是：导入年终奖时被月度模板塞进一堆 0 值绩效项，
+/// 看起来像"这个月绩效没发"。
+const String kTplMonthly = 'monthly';
+const String kTplExtra = 'extra';
+const String kTplAll = 'all';
+
+String templateTypeLabel(String appliesTo) => switch (appliesTo) {
+      kTplExtra => '奖金与其他',
+      kTplAll => '通用',
+      _ => '月度工资',
+    };
+
 /// 一套「发薪模板」= 这家公司的工资条长什么样。
 ///
 /// 为什么需要它：换公司、换岗、公司改工资条格式时，字段清单会变。
@@ -7,8 +21,8 @@ import 'models.dart';
 /// 归属关系是 **雇主 → 多套模板**：
 /// - 同一家公司可能先后用过几种工资条格式（涨薪、换系统、改绩效结构），
 ///   每种存一套，随时切回来对比；
-/// - 每家公司各自有一套「生效中」，互不干扰 —— 以前是全局只能有一套，
-///   跳槽后想把新公司设成生效，旧公司的录入预填就被一起改掉了。
+/// - 每家公司**每种适用类型各自有一套「生效中」**，互不干扰：月度一套、
+///   奖金一套（可再有一套通用兜底）。
 class SalaryTemplate {
   final int? id;
 
@@ -16,6 +30,10 @@ class SalaryTemplate {
   final int? employerId;
 
   final String name;
+
+  /// 适用类型：monthly（月度工资）/ extra（奖金与其他）/ all（两类通用）
+  final String appliesTo;
+
   final bool isActive;
   final int createdAt;
   final int updatedAt;
@@ -27,6 +45,7 @@ class SalaryTemplate {
     this.id,
     this.employerId,
     required this.name,
+    this.appliesTo = kTplMonthly,
     this.isActive = false,
     this.createdAt = 0,
     this.updatedAt = 0,
@@ -44,6 +63,7 @@ class SalaryTemplate {
         if (id != null) 'id': id,
         'employer_id': employerId,
         'name': name,
+        'applies_to': appliesTo,
         'is_active': isActive ? 1 : 0,
         'created_at': createdAt,
         'updated_at': updatedAt,
@@ -53,6 +73,8 @@ class SalaryTemplate {
         id: m['id'] as int?,
         employerId: m['employer_id'] as int?,
         name: (m['name'] as String?) ?? '',
+        // 老库/老备份没有这一列：一律当月度模板，行为与升级前一致
+        appliesTo: (m['applies_to'] as String?) ?? kTplMonthly,
         isActive: ((m['is_active'] as int?) ?? 0) == 1,
         createdAt: (m['created_at'] as int?) ?? 0,
         updatedAt: (m['updated_at'] as int?) ?? 0,
@@ -62,6 +84,7 @@ class SalaryTemplate {
     int? id,
     int? employerId,
     String? name,
+    String? appliesTo,
     bool? isActive,
     List<TemplateField>? fields,
   }) =>
@@ -69,6 +92,7 @@ class SalaryTemplate {
         id: id ?? this.id,
         employerId: employerId ?? this.employerId,
         name: name ?? this.name,
+        appliesTo: appliesTo ?? this.appliesTo,
         isActive: isActive ?? this.isActive,
         createdAt: createdAt,
         updatedAt: updatedAt,

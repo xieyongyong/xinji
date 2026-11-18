@@ -380,15 +380,32 @@ class AppState extends ChangeNotifier {
     return salaryTemplates.where((t) => t.employerId == null).toList();
   }
 
-  /// 某家雇主当前生效的模板（没有明确标记就退到最近改过的那套）
-  SalaryTemplate? activeTemplateFor(int? employerId) {
+  /// 某家雇主在某个适用类型下生效的模板。
+  ///
+  /// [appliesTo] 直接用记录类型（monthly / extra）：月度工资用月度模板，
+  /// 年终奖用奖金模板；奖金没有专属模板时**不退回月度模板**，
+  /// 只接受「通用」或干脆不预填 —— 否则奖金条会被塞一堆零值绩效项。
+  SalaryTemplate? activeTemplateFor(int? employerId, {String appliesTo = kTplMonthly}) {
     final list = salaryTemplatesOf(employerId);
     if (list.isEmpty) return null;
-    for (final t in list) {
-      if (t.isActive) return t;
+
+    SalaryTemplate? pick(bool Function(SalaryTemplate) test) {
+      for (final t in list) {
+        if (test(t)) return t;
+      }
+      return null;
     }
-    return list.first;
+
+    final type = appliesTo == kTplAll ? kTplMonthly : appliesTo;
+    return pick((t) => t.appliesTo == type && t.isActive) ??
+        pick((t) => t.appliesTo == kTplAll && t.isActive) ??
+        pick((t) => t.appliesTo == type) ??
+        pick((t) => t.appliesTo == kTplAll);
   }
+
+  /// 某家雇主某类型下的全部模板（列表页按类型分组用）
+  List<SalaryTemplate> salaryTemplatesOfType(int? employerId, String appliesTo) =>
+      salaryTemplatesOf(employerId).where((t) => t.appliesTo == appliesTo).toList();
 
   /// 当前雇主生效的模板（兼容旧调用点）
   SalaryTemplate? get activeSalaryTemplate =>

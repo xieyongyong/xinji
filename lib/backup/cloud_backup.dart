@@ -3,6 +3,50 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+// 简单的可逆混淆：不是强加密，只是避免明文躺在 SharedPreferences 里被一眼看到。
+// 真正的加密在 .xbk 本身（AES-256），这里保护的是网盘/备份密码。
+String obfuscateText(String s) => base64.encode(
+      utf8.encode(s).map((b) => (b ^ 0x5A) & 0xFF).toList(),
+    );
+
+String deobfuscateText(String s) => utf8.decode(
+      base64.decode(s).map((b) => (b ^ 0x5A) & 0xFF).toList(),
+    );
+
+/// 云盘备份的「备份加密密码」。
+///
+/// 这个密码通常是网盘随机生成的，记不住也不该记 —— 存在本机、
+/// 下次进页面自动带出即可（本机已经有应用锁保护）。
+/// 换手机时仍然要用同一个密码才能解开云端的 .xbk。
+class CloudBackupSecrets {
+  static const _kCrypt = 'cloud_backup_crypt_obf';
+
+  static Future<String> loadCryptPassword() async {
+    final sp = await SharedPreferences.getInstance();
+    final obf = sp.getString(_kCrypt) ?? '';
+    if (obf.isEmpty) return '';
+    try {
+      return deobfuscateText(obf);
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static Future<void> saveCryptPassword(String password) async {
+    final sp = await SharedPreferences.getInstance();
+    if (password.isEmpty) {
+      await sp.remove(_kCrypt);
+      return;
+    }
+    await sp.setString(_kCrypt, obfuscateText(password));
+  }
+
+  static Future<void> clearCryptPassword() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_kCrypt);
+  }
+}
+
 /// 云盘备份提供方。当前只有 WebDAV 实现；接口留着以后接百度/坚果云 SDK。
 abstract class CloudBackupProvider {
   Future<void> upload(String remoteName, List<int> bytes);
@@ -30,7 +74,14 @@ class WebDavConfig {
     final url = sp.getString(_kUrl) ?? '';
     final user = sp.getString(_kUser) ?? '';
     final obf = sp.getString(_kPass) ?? '';
-    final pass = obf.isEmpty ? '' : _deobfuscate(obf);
+    var pass = '';
+    if (obf.isNotEmpty) {
+      try {
+        pass = deobfuscateText(obf);
+      } catch (_) {
+        pass = '';
+      }
+    }
     if (url.isEmpty) return null;
     return WebDavConfig(url: url, user: user, password: pass);
   }
@@ -39,7 +90,13 @@ class WebDavConfig {
     final sp = await SharedPreferences.getInstance();
     await sp.setString(_kUrl, url.trim());
     await sp.setString(_kUser, user.trim());
-    await sp.setString(_kPass, _obfuscate(password));
+    await sp.setString(_kPass, obfuscateText(password));
+  }
+
+  /// 只忘掉密码，保留服务器地址和账号（下次进页面仍是配好的状态）
+  static Future<void> forgetPassword() async {
+    final sp = await SharedPreferences.getInstance();
+    await sp.remove(_kPass);
   }
 
   static Future<void> clear() async {
@@ -48,15 +105,6 @@ class WebDavConfig {
     await sp.remove(_kUser);
     await sp.remove(_kPass);
   }
-
-  // 简单的可逆混淆：不是强加密，只是避免明文躺在 SharedPreferences 里被一眼看到。
-  // 真正的加密在 .xbk 本身（AES-256），这里保护的是网盘账号密码。
-  static String _obfuscate(String s) => base64.encode(
-        utf8.encode(s).map((b) => (b ^ 0x5A) & 0xFF).toList(),
-      );
-  static String _deobfuscate(String s) => utf8.decode(
-        base64.decode(s).map((b) => (b ^ 0x5A) & 0xFF).toList(),
-      );
 }
 
 class WebDavException implements Exception {

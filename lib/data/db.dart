@@ -18,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 5,
+      version: 6,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -123,6 +123,7 @@ class AppDb {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         employer_id INTEGER,
         name TEXT NOT NULL,
+        applies_to TEXT NOT NULL DEFAULT 'monthly',
         is_active INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -151,6 +152,12 @@ class AppDb {
       await _createV2Tables(db);
       await _seedDefaultSalaryTemplate(db);
     }
+    // 放在 v5 之前：v5 迁移会复制模板，复制语句里带了 applies_to，
+    // 老库得先把这一列加上，否则 INSERT 会报"没有这个字段"。
+    if (oldVersion < 6) {
+      // v6：模板区分适用类型（月度 / 奖金与其他 / 通用）
+      await _migrateV6(db);
+    }
     if (oldVersion < 3) {
       // v3：基本绩效改为「推算值」（它不在应发里，早年被当成收入会多算一遍）
       await _migrateV3(db);
@@ -162,6 +169,17 @@ class AppDb {
     if (oldVersion < 5) {
       // v5：发薪模板挂到雇主下（一家公司可以有多套模板，各自一套生效）
       await _migrateV5(db);
+    }
+  }
+
+  /// v6 迁移：给模板加「适用类型」。
+  ///
+  /// 老模板全部按「月度工资」处理 —— 升级前的行为就是所有录入都用同一套，
+  /// 而绝大多数用户只有月度那套，这样升级后观感完全不变。
+  static Future<void> _migrateV6(Database db) async {
+    if (!await _hasColumn(db, 'salary_template', 'applies_to')) {
+      await db.execute(
+          "ALTER TABLE salary_template ADD COLUMN applies_to TEXT NOT NULL DEFAULT 'monthly'");
     }
   }
 
@@ -221,6 +239,7 @@ class AppDb {
     final newId = await db.insert('salary_template', {
       'employer_id': toEmployerId,
       'name': (src.first['name'] as String?) ?? '默认发薪模板',
+      'applies_to': (src.first['applies_to'] as String?) ?? 'monthly',
       'is_active': 1,
       'created_at': now,
       'updated_at': now,
