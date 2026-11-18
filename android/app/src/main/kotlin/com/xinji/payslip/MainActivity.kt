@@ -1,6 +1,7 @@
 package com.xinji.payslip
 
 import android.os.Bundle
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -17,6 +18,41 @@ import io.flutter.plugin.common.MethodChannel
  * 这是本项目最容易踩、又最难自己想明白的一个坑，改 CI 配置时不要动这一行。
  */
 class MainActivity : FlutterFragmentActivity() {
+
+    companion object {
+        private const val PRIVACY_CHANNEL = "xinji/privacy"
+    }
+
+    // 后台隐私保护是否开启（对应设置里的「后台隐藏内容」）。默认开，和 Dart 默认值一致。
+    @Volatile
+    private var privacyEnabled = true
+
+    // 当前 Activity 是否在前台。FLAG_SECURE 只在后台加，前台清掉以保留截屏/录屏能力。
+    private var foreground = true
+
+    // 切后台时给窗口加 FLAG_SECURE：系统拍「最近任务」缩略图、截屏、录屏时
+    // 只能拍到黑屏。这是系统级行为，不依赖 Flutter 渲染任何一帧，
+    // 所以既不会出现「后台没盖住」，也不会有「回前台闪一下遮罩」。
+    private fun applyPrivacyFlag() {
+        val flag = WindowManager.LayoutParams.FLAG_SECURE
+        if (!foreground && privacyEnabled) {
+            window.addFlags(flag)
+        } else {
+            window.clearFlags(flag)
+        }
+    }
+
+    override fun onPause() {
+        foreground = false
+        applyPrivacyFlag()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        foreground = true
+        applyPrivacyFlag()
+        super.onResume()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +72,19 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
+
+        // 后台隐私保护开关：Dart 侧设置变更/启动时把 privacyMask 推过来。
+        // onPause 之前就能拿到值，切后台时 applyPrivacyFlag 即可正确加/不加 flag。
+        MethodChannel(messenger, PRIVACY_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setEnabled" -> {
+                    privacyEnabled = call.argument<Boolean>("enabled") ?: true
+                    applyPrivacyFlag()
+                    result.success(true)
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         // 图片分块 / 压缩通道。长截图必须走这里：
         // Dart 侧整图解码一张 1080×12000 的图要 50MB，

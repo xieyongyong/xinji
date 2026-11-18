@@ -473,8 +473,8 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (v) => settings.setPrivacyMask(v),
                   title: const Text('后台隐藏内容', style: TextStyle(fontSize: 14)),
                   subtitle: Text(
-                    '切到后台时盖住整屏，最近任务里只看得到「内容已隐藏」，'
-                    '看不到工资明细。回到应用自动恢复。',
+                    '切到后台后，最近任务的预览图变黑屏，看不到工资明细；'
+                    '回到应用自动恢复。开启时后台无法截屏/录屏本应用。',
                     style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
                   ),
                   isThreeLine: true,

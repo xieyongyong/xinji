@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ui/theme.dart';
 import 'money.dart';
+import 'privacy_channel.dart';
 
 /// 全局用户偏好。
 ///
@@ -148,6 +149,8 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kPrivacyMask, v);
+    // 实时同步给原生：开启则切后台加 FLAG_SECURE，关闭则不加。
+    await PrivacyChannel.setEnabled(v);
   }
 
   Future<void> setLockDelay(int seconds) async {
