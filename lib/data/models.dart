@@ -385,14 +385,18 @@ class ItemTemplate {
   });
 
   /// 判断一个识别出来的项目名是否属于本模板项
+  ///
+  /// 比对时会把「2025年终奖金」这类带年份的写法拆成几种候选
+  /// （见 [nameVariants]），否则年终奖条上的项目对不上别名「年终奖金」。
   bool matches(String rawName) {
-    final n = normalizeName(rawName);
-    if (n.isEmpty) return false;
-    if (n == normalizeName(name)) return true;
+    final candidates = nameVariants(rawName);
+    if (candidates.isEmpty) return false;
+    final targets = <String>{normalizeName(name)};
     for (final a in aliases) {
-      if (n == normalizeName(a)) return true;
+      final k = normalizeName(a);
+      if (k.isNotEmpty) targets.add(k);
     }
-    return false;
+    return candidates.any(targets.contains);
   }
 
   Map<String, Object?> toMap() => {

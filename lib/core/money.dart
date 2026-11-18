@@ -156,9 +156,29 @@ String normalizeName(String raw) {
   s = s.replaceAll(RegExp(r'\(.*?\)'), '');
   s = s.replaceAll('金额', '');
   s = s.replaceAll('本月', '');
-  // 「2025年终奖金」这类带年份前缀的行：奖金条的标题往往就是项目名，
-  // 不去掉年份就跟模板里的「年终奖金」别名对不上，会被当成另一笔收入，
-  // 收入直接翻倍（年终奖条上同一个数还印了三遍，翻三倍）。
-  s = s.replaceFirst(RegExp(r'^20\d{2}年'), '');
   return s;
+}
+
+/// 一个项目名的几种等价写法，用于匹配模板里的别名。
+///
+/// 「2025年终奖金」这串有两种读法：年份前缀「2025年」+「终奖金」，
+/// 或者「2025」+「年终奖金」。奖金条的标题/项目名常常带年份，
+/// 两种都得试 —— 只剥「20xx年」会把「年终奖金」的年一起吃掉，剩个「终奖金」，
+/// 于是对不上模板，这笔钱就被当成另一个项目算两遍。
+///
+/// 注意：这只是**匹配用的候选**，不要拿它当存储键，否则同一个月会出现两行。
+List<String> nameVariants(String raw) {
+  final n = normalizeName(raw);
+  if (n.isEmpty) return const [];
+  final out = <String>{n};
+  final m = RegExp(r'^20\d{2}年?').firstMatch(n);
+  if (m != null) {
+    final rest = n.substring(m.end);
+    if (rest.length >= 2) {
+      out.add(rest);
+      // 被当成"年份后缀"吃掉的这个「年」，可能是项目名自己的第一个字
+      if (m.group(0)!.endsWith('年')) out.add('年$rest');
+    }
+  }
+  return out.toList();
 }
