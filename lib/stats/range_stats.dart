@@ -67,7 +67,7 @@ class RangeSummary {
   // records 在生命周期内不变，算一次缓存起来，避免反复全量 fold。
   int? _totalNet, _totalGross, _totalDeduction;
   int? _monthlyNet, _extraNet, _monthCount;
-  List<PayRecord>? _monthly, _extras;
+  List<PayRecord>? _monthlyCache, _extrasCache;
   String? _periodLabel;
   List<MapEntry<String, int>>? _incomeByItem, _deductionByItem, _extraByLabel;
   List<YearAgg>? _byYear;
@@ -83,9 +83,9 @@ class RangeSummary {
   int get totalDeduction => _totalDeduction ??= _sum((r) => r.deductionCents);
 
   List<PayRecord> get _monthly =>
-      _monthly ??= records.where((r) => r.recordType == kTypeMonthly).toList();
+      _monthlyCache ??= records.where((r) => r.recordType == kTypeMonthly).toList();
   List<PayRecord> get _extras =>
-      _extras ??= records.where((r) => r.recordType == kTypeExtra).toList();
+      _extrasCache ??= records.where((r) => r.recordType == kTypeExtra).toList();
 
   int get monthlyNet => _monthlyNet ??= _monthly.fold(0, (s, r) => s + r.netCents);
   int get extraNet => _extraNet ??= _extras.fold(0, (s, r) => s + r.netCents);
