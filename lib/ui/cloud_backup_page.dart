@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../backup/backup_service.dart';
+import '../backup/cloud_auto_backup.dart';
 import '../backup/cloud_backup.dart';
 import '../core/app_settings.dart';
 import '../data/db.dart';
@@ -30,6 +31,12 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
   bool _showPass = false;
   bool _showCrypt = false;
 
+  /// 配置读完之前不渲染表单。
+  ///
+  /// 不这么做的话首帧是空输入框（label 居中），异步回填后 label 才浮到顶部，
+  /// 用户看到的就是"标签先错位、1 秒后才归位"。
+  bool _loaded = false;
+
   @override
   void initState() {
     super.initState();
@@ -46,6 +53,7 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       // 本机记住的密码直接回填：这是自己手机，每次重输既麻烦又容易错
       _passCtrl.text = cfg?.password ?? '';
       _cryptCtrl.text = crypt;
+      _loaded = true;
     });
     if (cfg != null) _checkRemote();
   }
@@ -243,6 +251,13 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_loaded) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('云盘备份')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    final settings = context.watch<AppSettings>();
     return Scaffold(
       appBar: AppBar(title: const Text('云盘备份')),
       body: Stack(
@@ -309,6 +324,9 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
                 icon: const Icon(Icons.cloud_download_outlined, size: 18),
                 label: const Text('从云盘恢复'),
               ),
+              const Divider(height: 28),
+              _sectionTitle('定时自动备份'),
+              _autoBackupCard(settings),
               if (_status != null) ...[
                 const SizedBox(height: 16),
                 Text(_status!, style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
@@ -329,6 +347,157 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
         ],
       ),
     );
+  }
+
+  /// 定时自动备份：一个月做一次全量，够用且不会把网盘塞满。
+  Widget _autoBackupCard(AppSettings settings) {
+    final on = settings.cloudAutoBackup;
+    final last = settings.cloudAutoBackupLastAt;
+    final lastText = last <= 0
+        ? '还没成功备份过'
+        : '上次成功：${_fmtTime(DateTime.fromMillisecondsSinceEpoch(last))}';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 12),
+      decoration: cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SwitchListTile(
+            value: on,
+            onChanged: (v) => settings.setCloudAutoBackup(v),
+            title: const Text('每月自动备份到云盘', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              '不是后台定时任务：到了日子后你打开应用，它会自动补做一次'
+              '（后台常驻任务会耗电、还会被系统杀，一个月一次的备份不值当）。',
+              style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+            ),
+            isThreeLine: true,
+            contentPadding: EdgeInsets.zero,
+          ),
+          if (on) ...[
+            const SizedBox(height: 2),
+            Row(
+              children: [
+                Text('备份日', style: TextStyle(fontSize: 13, color: kTextBody)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton(
+                      onPressed: () => _pickBackupDay(settings),
+                      child: Text(
+                        '每月 ${settings.cloudAutoBackupDay} 号',
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _busy ? null : () => _runAutoBackupNow(settings),
+                  child: const Text('立即备份一次'),
+                ),
+              ],
+            ),
+            Text(lastText,
+                style: TextStyle(fontSize: 11.5, color: kTextHint)),
+            if (settings.cloudAutoBackupError.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  '上次自动备份失败：${settings.cloudAutoBackupError}',
+                  style: TextStyle(fontSize: 11.5, color: kWarnText),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                '需要先在上面填好服务器、账号、密码和备份密码，'
+                '自动备份不会弹窗打扰你，失败原因会显示在这里。',
+                style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  String _fmtTime(DateTime t) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+  }
+
+  Future<void> _pickBackupDay(AppSettings settings) async {
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('每月几号备份'),
+        content: SizedBox(
+          width: 320,
+          child: GridView.count(
+            crossAxisCount: 7,
+            shrinkWrap: true,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 6,
+            children: [
+              for (var d = 1; d <= 28; d++)
+                InkWell(
+                  onTap: () => Navigator.pop(ctx, d),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: d == settings.cloudAutoBackupDay ? kSeed : kSurfaceAlt,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$d',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: d == settings.cloudAutoBackupDay
+                            ? Colors.white
+                            : kTextBody,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await settings.setCloudAutoBackupDay(picked);
+    if (mounted) _toast('已设为每月 $picked 号（当天或之后第一次打开应用时备份）');
+  }
+
+  /// 立即按自动备份的规则跑一次（也用来验证配置到底通不通）
+  Future<void> _runAutoBackupNow(AppSettings settings) async {
+    setState(() {
+      _busy = true;
+      _status = '正在自动备份…';
+    });
+    try {
+      final msg = await CloudAutoBackup.runNow(settings);
+      if (!mounted) return;
+      if (msg != null) {
+        setState(() {
+          _remoteTime = DateTime.now();
+          _status = msg;
+        });
+        _toast('自动备份成功，这个月不会再自动跑');
+      } else {
+        final err = settings.cloudAutoBackupError;
+        setState(() => _status = err.isEmpty ? '没跑起来，先检查上面的配置' : err);
+        _toast(err.isEmpty ? '先填好服务器、账号和两个密码' : err);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Widget _tip() => Container(
@@ -361,6 +530,9 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
+        // 永远浮在框线上：label 只在"有值/聚焦"时才浮起的话，
+        // 首帧是空框（label 居中）、回填后跳成浮动，看起来就是文字错位。
+        floatingLabelBehavior: FloatingLabelBehavior.always,
         border: const OutlineInputBorder(),
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         suffixIcon: onToggleVisibility == null

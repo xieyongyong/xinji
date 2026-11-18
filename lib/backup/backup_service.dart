@@ -54,6 +54,7 @@ class BackupService {
     'de_watermark',
     'privacy_mask',
     'hide_amounts',
+    'cloud_auto_backup',
   ];
   static const _prefIntKeys = [
     'color_up',
@@ -62,6 +63,9 @@ class BackupService {
     'theme_mode',
     'lock_delay_seconds',
     'current_employer_id',
+    'cloud_auto_backup_day',
+    'cloud_auto_backup_last_at',
+    'cloud_auto_backup_last_try',
   ];
 
   // ------------------------------------------------------------ 导出

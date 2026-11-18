@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../backup/cloud_auto_backup.dart';
 import '../core/app_settings.dart';
 import '../core/app_update.dart';
 import '../core/money.dart';
@@ -38,9 +39,12 @@ class _HomePageState extends State<HomePage> {
     super.initState();
     // 排成一条链：先问要不要开锁，再查更新。
     // 两个弹窗同时抢屏会叠在一起，而且"要不要加把锁"优先级更高。
+    final settings = context.read<AppSettings>();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _maybePromptLock();
       await _maybeCheckUpdate();
+      // 排在最后：定时云盘备份是背景活，别跟弹窗抢时间
+      await CloudAutoBackup.runIfDue(settings);
     });
   }
 
@@ -98,6 +102,8 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    // 金额打码的开关放在顶栏：这是随时要用的"遮挡一下"，不该藏在设置里翻三层
+    final hideAmounts = context.watch<AppSettings>().hideAmounts;
     final years = state.years;
 
     // 刚切换雇主时，把年份跳到它最近的记录年份。
@@ -127,6 +133,23 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
         actions: [
+          IconButton(
+            tooltip: hideAmounts ? '显示金额' : '隐藏金额（当着别人查数据时用）',
+            icon: Icon(
+              hideAmounts
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+            ),
+            onPressed: () {
+              context.read<AppSettings>().setHideAmounts(!hideAmounts);
+              ScaffoldMessenger.of(context)
+                ..clearSnackBars()
+                ..showSnackBar(SnackBar(
+                  duration: const Duration(seconds: 2),
+                  content: Text(hideAmounts ? '金额已显示' : '金额已打码，再点一次恢复'),
+                ));
+            },
+          ),
           IconButton(
             tooltip: '统计（总计 / 年度 / 月度 / 项目 / 雇主）',
             icon: const Icon(Icons.insights_outlined),

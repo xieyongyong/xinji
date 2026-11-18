@@ -481,20 +481,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: Icon(Icons.visibility_off_outlined, size: 20, color: kTextBody),
                 ),
-                const Divider(height: 1),
-                SwitchListTile(
-                  value: settings.hideAmounts,
-                  onChanged: (v) => settings.setHideAmounts(v),
-                  title: const Text('金额打码', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    '首页、详情、统计里的金额显示成 ¥****，方便当着别人查数据时用。'
-                    '不影响导出备份和录入。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
-                  ),
-                  isThreeLine: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                  secondary: Icon(Icons.credit_card_off_outlined, size: 20, color: kTextBody),
-                ),
               ]),
               const SizedBox(height: 18),
               _sectionTitle('备份与恢复'),
@@ -547,16 +533,43 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
-              _sectionTitle('项目'),
+              _sectionTitle('模板'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+                child: Text(
+                  '这两个不是一回事：\n'
+                  '· 项目模板 = 名字词典。决定某一项算收入还是扣款、还有哪些别名，'
+                  '识别和跨月对齐都靠它，全局共用、不分雇主。\n'
+                  '· 工资条模板 = 这家公司工资条长什么样。有哪些字段、按什么顺序排、'
+                  '是月度还是奖金，只管录入时的预填与排序。',
+                  style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
+                ),
+              ),
               _card([
                 _item(
                   icon: Icons.tune,
-                  title: '项目模板管理',
-                  subtitle: '共 ${state.templates.length} 项，可加别名让不同叫法自动对齐',
+                  title: '项目模板',
+                  subtitle: '识别用的名字词典，共 ${state.templates.length} 项',
                   onTap: () async {
                     await Navigator.of(context).push(
                       MaterialPageRoute(builder: (_) => const TemplatePage()),
                     );
+                  },
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.assignment_outlined,
+                  title: '工资条模板',
+                  subtitle: _templateSummary(state),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => SalaryTemplatePage(
+                          employerId: state.currentEmployer?.id,
+                        ),
+                      ),
+                    );
+                    setState(() {});
                   },
                 ),
               ]),
@@ -594,22 +607,6 @@ class _SettingsPageState extends State<SettingsPage> {
               const SizedBox(height: 18),
               _sectionTitle('录入与显示'),
               _card([
-                _item(
-                  icon: Icons.assignment_outlined,
-                  title: '工资条模板',
-                  subtitle: _templateSummary(state),
-                  onTap: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => SalaryTemplatePage(
-                          employerId: state.currentEmployer?.id,
-                        ),
-                      ),
-                    );
-                    setState(() {});
-                  },
-                ),
-                const Divider(height: 1),
                 SwitchListTile(
                   value: settings.perfAuto,
                   onChanged: (v) => settings.setPerfAuto(v),

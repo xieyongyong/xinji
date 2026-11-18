@@ -48,6 +48,14 @@ class FieldParser {
   /// 带这些字的行不可能是"合计"，只可能是项目（防止"实发绩效工资"被当成实发合计）
   static const List<String> itemGuardWords = ['绩效', '奖金', '津贴', '补贴', '加班', '提成'];
 
+  /// 例外：守卫词里带"奖金"的行，如果整体就叫「实发奖金」那就是净额本身。
+  ///
+  /// 奖金条一般只有三行：本月应发奖金 / 个人所得税 / 实发奖金。
+  /// 不把最后一行当净额的话，它会被当成一笔收入，收入合计直接翻倍。
+  static const List<String> netOnlyKeywords = [
+    '实发奖金', '税后奖金', '到手奖金', '奖金实发', '奖金净额',
+  ];
+
   static const List<String> ambiguousTotalKeywords = ['合计', '总计', '小计', '总额', '共计'];
 
   /// 命中即视为噪声（表头、身份信息、说明）。注意不要放"岗位""工资"这类宽泛词，
@@ -401,6 +409,22 @@ class FieldParser {
     if (_looksLikeNet(label)) return ParsedRowKind.totalNet;
     if (_looksLikeGross(label)) return ParsedRowKind.totalGross;
     if (_containsAny(label, deductionKeywords)) return ParsedRowKind.totalDeduction;
+
+    // 3) 项目守卫词：带"奖金/绩效/津贴/补贴/加班/提成"的只可能是明细。
+    //
+    //    这一步必须放在噪声判定**之前**：奖金条上最关键的那一行往往就叫
+    //    「本月应发奖金」，以前会先命中 noiseKeywords 里的"本月应发"被当噪声
+    //    丢掉，最后整张奖金条只剩「个人所得税」一项能认出来。
+    //    只有真的以"合计/小计/总额"结尾（如"奖金合计"）才交给合并阶段
+    //    按数值去归属，避免把合计当明细重复计入。
+    if (_containsAny(label, itemGuardWords)) {
+      if (_endsWithAny(label, ambiguousTotalKeywords)) {
+        return ParsedRowKind.ambiguousTotal;
+      }
+      return ParsedRowKind.item;
+    }
+
+    // 4) 噪声 / 模糊合计
     if (_containsAny(label, noiseKeywords)) return ParsedRowKind.noise;
     if (_containsAny(label, ambiguousTotalKeywords)) {
       return ParsedRowKind.ambiguousTotal;
@@ -408,8 +432,17 @@ class FieldParser {
     return ParsedRowKind.item;
   }
 
+  bool _endsWithAny(String text, List<String> keys) {
+    for (final k in keys) {
+      if (text.endsWith(k)) return true;
+    }
+    return false;
+  }
+
   /// "实发" 只有在**不是**某个具体项目（绩效/奖金/津贴）时才算实发合计
   bool _looksLikeNet(String label) {
+    // 「实发奖金」是净额，不是一笔叫"实发奖金"的收入 —— 先于守卫词判定
+    if (_containsAny(label, netOnlyKeywords)) return true;
     if (_containsAny(label, itemGuardWords)) return false;
     if (label == '实发') return true;
     return _containsAny(label, netKeywords);

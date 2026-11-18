@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xinji/core/money.dart';
+import 'package:xinji/ocr/field_parser.dart';
 import 'package:xinji/ocr/merge_engine.dart';
 import 'package:xinji/ocr/ocr_models.dart';
 
@@ -179,4 +180,76 @@ void main() {
       expect(parseCoefficient('0'), isNull);
     });
   });
+
+  // 奖金条的字段结构和月度完全不同，这一组都是为了别再出现
+  // "整张奖金条只认出个税" 那种情况。
+  group('奖金条识别', () {
+    test('「本月应发奖金」不能被当噪声丢掉', () {
+      final parser = FieldParser([]);
+      final img = parser.parseImage(
+        index: 0,
+        filePath: 'a.jpg',
+        rawText: '',
+        lines: [
+          raw('本月应发奖金', 0, left: 0),
+          raw('8000.00', 0, left: 200),
+          raw('个人所得税', 1, left: 0),
+          raw('800.00', 1, left: 200),
+        ],
+      );
+
+      final gross = img.rows.firstWhere((e) => e.name.contains('应发奖金'));
+      expect(gross.kind, ParsedRowKind.item);
+      expect(gross.amountCents, 800000);
+
+      final tax = img.rows.firstWhere((e) => e.name.contains('个税')
+          || e.name.contains('所得税'));
+      expect(tax.kind, ParsedRowKind.item);
+    });
+
+    test('「实发奖金」是净额，不是一笔收入', () {
+      final parser = FieldParser([]);
+      final img = parser.parseImage(
+        index: 0,
+        filePath: 'a.jpg',
+        rawText: '',
+        lines: [
+          raw('实发奖金', 0, left: 0),
+          raw('7200.00', 0, left: 200),
+        ],
+      );
+      expect(img.rows.first.kind, ParsedRowKind.totalNet);
+    });
+
+    test('对不上任何合计的「奖金合计」会被兜回来当收入', () {
+      final merged = MergeEngine([]).merge([
+        image(0, [
+          r('奖金合计', 800000, kind: ParsedRowKind.ambiguousTotal),
+          r('个人所得税', 80000, kind: ParsedRowKind.item),
+          r('实发奖金', 720000, kind: ParsedRowKind.totalNet),
+        ]),
+      ]);
+
+      final income = merged.items.where((e) => e.isIncome).toList();
+      expect(income.length, 1);
+      expect(income.first.amountCents, 800000);
+      // "奖金合计" 去掉"合计"再取名字，别把"合计"写进项目名
+      expect(income.first.name, '奖金');
+      expect(merged.grossCents, 800000);
+      expect(merged.netCents, 720000);
+      expect(
+        merged.issues.any((e) => e.type == MergeIssueType.recovered),
+        isTrue,
+      );
+    });
+  });
 }
+
+/// 造一个 OCR 文本片段（同一 top 的两个片段会被 LineBuilder 合成一行）
+RawLine raw(String text, int row, {required double left}) => RawLine(
+      text: text,
+      left: left,
+      right: left + 90,
+      top: 10.0 + row * 30,
+      bottom: 30.0 + row * 30,
+    );

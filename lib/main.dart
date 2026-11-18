@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'backup/cloud_auto_backup.dart';
 import 'core/app_settings.dart';
 import 'core/crash_log.dart';
 import 'security/lock_service.dart';
@@ -81,6 +82,8 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
           }
         }
         widget.lock.unmask();
+        // 回到前台顺手补一次「这个月该备份了」的检查（内部有互斥和退避）
+        CloudAutoBackup.runIfDue(widget.settings);
         break;
       default:
         break;

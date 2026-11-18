@@ -18,6 +18,10 @@ class AppSettings extends ChangeNotifier {
   static const _kPrivacyMask = 'privacy_mask';
   static const _kLockDelay = 'lock_delay_seconds';
   static const _kHideAmounts = 'hide_amounts';
+  static const _kCloudAuto = 'cloud_auto_backup';
+  static const _kCloudAutoDay = 'cloud_auto_backup_day';
+  static const _kCloudAutoLast = 'cloud_auto_backup_last_at';
+  static const _kCloudAutoTry = 'cloud_auto_backup_last_try';
 
   /// 绩效工资是否按「基本绩效 × 绩效系数」自动计算
   bool perfAuto = false;
@@ -55,6 +59,24 @@ class AppSettings extends ChangeNotifier {
   /// 金额打码：把界面上的金额显示成 ¥****（不影响导出和录入）
   bool hideAmounts = false;
 
+  /// 每月自动备份到云盘
+  bool cloudAutoBackup = false;
+
+  /// 每月几号备份（1-28；不给 29-31 是因为二月没有，选 31 号会整月不触发）
+  int cloudAutoBackupDay = 1;
+
+  /// 上次**成功**自动备份的时间（毫秒）。判断"本月做过了没"用它。
+  int cloudAutoBackupLastAt = 0;
+
+  /// 上次**尝试**自动备份的时间（毫秒），失败退避用
+  int cloudAutoBackupLastTry = 0;
+
+  /// 上次自动备份失败的原因（成功后清空）
+  String cloudAutoBackupError = '';
+
+  /// 1-28，超出范围一律夹回来
+  static int normalizeBackupDay(int day) => day < 1 ? 1 : (day > 28 ? 28 : day);
+
   ThemeMode get materialThemeMode {
     if (themeMode == 1) return ThemeMode.light;
     if (themeMode == 2) return ThemeMode.dark;
@@ -77,6 +99,12 @@ class AppSettings extends ChangeNotifier {
     lockDelaySeconds = sp.getInt(_kLockDelay) ?? 30;
     hideAmounts = sp.getBool(_kHideAmounts) ?? false;
     kMaskAmounts = hideAmounts;
+    cloudAutoBackup = sp.getBool(_kCloudAuto) ?? false;
+    cloudAutoBackupDay = normalizeBackupDay(sp.getInt(_kCloudAutoDay) ?? 1);
+    cloudAutoBackupLastAt = sp.getInt(_kCloudAutoLast) ?? 0;
+    cloudAutoBackupLastTry = sp.getInt(_kCloudAutoTry) ?? 0;
+    // 错误只在内存里（不落盘、不进备份），重载时清掉
+    cloudAutoBackupError = '';
     _syncPalette();
     notifyListeners();
   }
@@ -135,6 +163,45 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kHideAmounts, v);
+  }
+
+  Future<void> setCloudAutoBackup(bool v) async {
+    cloudAutoBackup = v;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kCloudAuto, v);
+  }
+
+  Future<void> setCloudAutoBackupDay(int day) async {
+    cloudAutoBackupDay = normalizeBackupDay(day);
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kCloudAutoDay, cloudAutoBackupDay);
+  }
+
+  /// 记录一次尝试（失败退避用）
+  Future<void> markCloudAutoBackupTry() async {
+    cloudAutoBackupLastTry = DateTime.now().millisecondsSinceEpoch;
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kCloudAutoTry, cloudAutoBackupLastTry);
+  }
+
+  /// 备份成功：记下时间、清掉上次的错误
+  Future<void> markCloudAutoBackupDone() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    cloudAutoBackupLastAt = now;
+    cloudAutoBackupLastTry = now;
+    cloudAutoBackupError = '';
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kCloudAutoLast, cloudAutoBackupLastAt);
+    await sp.setInt(_kCloudAutoTry, now);
+  }
+
+  /// 备份失败：只留在页面上给人看，不弹窗打断
+  Future<void> markCloudAutoBackupError(String message) async {
+    cloudAutoBackupError = message;
+    notifyListeners();
   }
 
   Future<void> setCompressImages(bool v) async {

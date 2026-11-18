@@ -114,6 +114,10 @@ class _ReviewPageState extends State<ReviewPage> {
   final List<PayImage> _images = [];
   MergeResult? _merge;
   bool _showDuplicates = false;
+
+  /// 是否展开"被跳过但带金额的行"
+  bool _showIgnored = false;
+
   bool _saving = false;
 
   /// 本次录入用的发薪模板。明细顺序一律按它的字段顺序排 ——
@@ -880,6 +884,67 @@ class _ReviewPageState extends State<ReviewPage> {
             Text('· ${issue.message}',
                 style: TextStyle(
                     fontSize: 11.8, height: 1.5, color: kWarnLink)),
+          ],
+          // 兜回来的行：不是错误，是"我帮你补了一项，你确认下"
+          for (final issue in m.issues.where((e) => e.type == MergeIssueType.recovered)) ...[
+            const SizedBox(height: 6),
+            Text('· ${issue.message}',
+                style: TextStyle(fontSize: 11.8, height: 1.5, color: kTextSecondary)),
+          ],
+          // 带金额但没进明细的行：以前是静默丢掉的，对不上账时根本查不到原因
+          if (m.ignoredRows.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            InkWell(
+              onTap: () => setState(() => _showIgnored = !_showIgnored),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
+                  children: [
+                    Text(
+                      _showIgnored
+                          ? '收起被跳过的行'
+                          : '有 ${m.ignoredRows.length} 行带金额但没进明细，点开看看',
+                      style: TextStyle(
+                          fontSize: 11.8, color: kSeed, fontWeight: FontWeight.w500),
+                    ),
+                    Icon(
+                      _showIgnored ? Icons.expand_less : Icons.expand_more,
+                      size: 15,
+                      color: kSeed,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (_showIgnored)
+              for (final r in m.ignoredRows)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, left: 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${r.name}  ${r.amountCents == null ? '' : formatCents(r.amountCents!)}',
+                          style: TextStyle(fontSize: 11.5, color: kTextMedium),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _items.add(PayItemDraft(
+                              name: r.name.trim(),
+                              category: kCategoryIncome,
+                              amountCents: (r.amountCents ?? 0).abs(),
+                            ));
+                            _normalizeOrder();
+                          });
+                        },
+                        child: Text('加进来',
+                            style: TextStyle(fontSize: 11.5, color: kSeed)),
+                      ),
+                    ],
+                  ),
+                ),
           ],
           if (m.removedDuplicates.isNotEmpty) ...[
             const SizedBox(height: 6),

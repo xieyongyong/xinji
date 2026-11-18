@@ -16,6 +16,9 @@ enum MergeIssueType {
   /// 明细加总与工资条上的合计不一致
   totalMismatch,
 
+  /// 某一行被兜回来了（比如奖金条上那行"应发奖金"原本对不上任何合计）
+  recovered,
+
   /// 没识别出任何明细
   empty,
 }
@@ -85,6 +88,12 @@ class MergeResult {
   /// 因识别到重叠而去掉的重复行数
   final int overlapRemovedRows;
 
+  /// 带金额、但被判定成噪声/表头而没进明细的行（原文名 + 金额）。
+  ///
+  /// 以前这些行是**静默消失**的：用户只看到"少了一项"，完全不知道为什么。
+  /// 现在把名字列出来，对不上账时能一眼看出是哪一行被丢了。
+  final List<ParsedRow> ignoredRows;
+
   /// 本次是否所有图都参与了合并
   final int imageCount;
 
@@ -97,6 +106,7 @@ class MergeResult {
     required this.deductionTotalCents,
     required this.netCents,
     required this.overlapRemovedRows,
+    this.ignoredRows = const [],
     required this.imageCount,
   });
 
@@ -269,12 +279,13 @@ class MergeEngine {
       ));
     }
 
-    final incomeSum =
+    var incomeSum =
         items.where((e) => e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
-    final deductionSum =
+    var deductionSum =
         items.where((e) => !e.isIncome && e.countsInTotal).fold(0, (s, e) => s + e.amountCents);
 
     // ---- 6. 模糊"合计"行的归属：用它等于哪组明细之和来判断 ----
+    final unclaimed = <ParsedRow>[];
     for (final list in perImageAmbiguous) {
       for (final row in list) {
         final v = row.amountCents!.abs();
@@ -284,9 +295,41 @@ class MergeEngine {
           deductionTotal = v;
         } else if (net == null && v == (incomeSum - deductionSum)) {
           net = v;
+        } else {
+          // 都对不上就压着（可能是"小计"等其他含义），下面 6.5 还有一次机会
+          unclaimed.add(row);
         }
-        // 都对不上就忽略（可能是"小计"等其他含义）
       }
+    }
+
+    // ---- 6.5 兜底：一条收入明细都没认出来，但有一行没归属的"…合计" ----
+    //
+    // 典型场景是奖金条：整张纸只有「本月应发奖金 / 个人所得税 / 实发奖金」。
+    // 如果中间那行写成了"奖金合计"，它会被判成合计，而当时明细是空的、
+    // 对不上任何和，于是被静默丢弃 —— 最后就只剩个税一项。
+    // 这里按「净额 + 代扣 = 应发」反推出应发，正好对得上就把它当收入项收回来。
+    if (unclaimed.isNotEmpty && items.every((e) => !e.isIncome)) {
+      final impliedGross = (net ?? 0) + (deductionTotal ?? 0);
+      unclaimed.sort(
+          (a, b) => b.amountCents!.abs().compareTo(a.amountCents!.abs()));
+      final pick = unclaimed.firstWhere(
+        (r) => impliedGross > 0 && r.amountCents!.abs() == impliedGross,
+        orElse: () => unclaimed.first,
+      );
+      final cleanName = _stripTotalWord(pick.name.trim());
+      final draft = _toDraft(pick);
+      // 去掉"合计"后再过一遍模板，能对齐成标准项目名就对齐（"奖金"→"特别奖金"）
+      draft.name = _templateOf(cleanName)?.name ??
+          (cleanName.isEmpty ? '应发奖金' : cleanName);
+      draft.category = kCategoryIncome;
+      items.insert(0, draft);
+      incomeSum = items
+          .where((e) => e.isIncome && e.countsInTotal)
+          .fold(0, (s, e) => s + e.amountCents);
+      issues.add(MergeIssue(
+        MergeIssueType.recovered,
+        '「${pick.name.trim()}」原本对不上任何明细，已作为收入项补回，请确认识别金额是否正确',
+      ));
     }
 
     // ---- 7. 缺失的合计用明细算出来补上 ----
@@ -361,8 +404,34 @@ class MergeEngine {
       deductionTotalCents: deductionTotal,
       netCents: net,
       overlapRemovedRows: overlapRemoved,
+      ignoredRows: _ignoredRows(images),
       imageCount: images.length,
     );
+  }
+
+  /// 带金额却没进明细的行（"丢了什么"要让人看得见）
+  List<ParsedRow> _ignoredRows(List<ParsedImage> images) {
+    final out = <ParsedRow>[];
+    for (final img in images) {
+      for (final r in img.rows) {
+        if (r.kind != ParsedRowKind.noise) continue;
+        final v = r.amountCents;
+        if (v == null || v == 0) continue;
+        out.add(r);
+      }
+    }
+    return out.length > 20 ? out.sublist(0, 20) : out;
+  }
+
+  /// "奖金合计" → "奖金"（兜底成明细项时用，别把"合计"写进项目名）
+  String _stripTotalWord(String name) {
+    const words = ['合计', '小计', '总计', '总额', '共计'];
+    for (final w in words) {
+      if (name.length > w.length && name.endsWith(w)) {
+        return name.substring(0, name.length - w.length).trim();
+      }
+    }
+    return name;
   }
 
   /// 一行解析结果 -> 待入库草稿（统一的转换逻辑，去重与正式明细共用）

@@ -158,47 +158,10 @@ class _ComparePageState extends State<ComparePage> {
   }
 
   Widget _pickerRow(List<MonthSummary> periods, int aKey, int bKey) {
-    Widget dropdown(String label, int value, int otherKey, ValueChanged<int> onChanged) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
-            decoration: BoxDecoration(
-              color: kSurface,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: kDivider),
-            ),
-            child: DropdownButton<int>(
-              value: value,
-              isExpanded: true,
-              underline: const SizedBox.shrink(),
-              isDense: true,
-              style: TextStyle(fontSize: 14, color: kTextPrimary),
-              items: [
-                for (final m in periods)
-                  // 两边选同一期没有意义，直接不列出来
-                  if (_keyOf(m) != otherKey)
-                    DropdownMenuItem(
-                      value: _keyOf(m),
-                      child: Text('${m.year}年${m.month}月'),
-                    ),
-              ],
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-              },
-            ),
-          ),
-        ],
-      );
-    }
-
     return Row(
       children: [
         Expanded(
-          child: dropdown('对比基准（早）', aKey, bKey,
+          child: _periodField('对比基准（早）', aKey, bKey, periods,
               (v) => setState(() => _keyA = v)),
         ),
         Padding(
@@ -206,10 +169,201 @@ class _ComparePageState extends State<ComparePage> {
           child: Icon(Icons.arrow_forward, size: 18, color: kTextHint),
         ),
         Expanded(
-          child: dropdown('对比月份（晚）', bKey, aKey,
+          child: _periodField('对比月份（晚）', bKey, aKey, periods,
               (v) => setState(() => _keyB = v)),
         ),
       ],
+    );
+  }
+
+  Widget _periodField(
+    String label,
+    int value,
+    int otherKey,
+    List<MonthSummary> periods,
+    ValueChanged<int> onPicked,
+  ) {
+    final m = periods.firstWhere((e) => _keyOf(e) == value);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
+        const SizedBox(height: 4),
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () async {
+            final picked = await _pickPeriod(periods,
+                exclude: otherKey, initial: value, selected: {value, otherKey});
+            if (picked != null) onPicked(picked);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: kSurface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: kDivider),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '${m.year}年${m.month}月',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 14, color: kTextPrimary),
+                  ),
+                ),
+                Icon(Icons.expand_more, size: 18, color: kTextHint),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 选月份：年份一行 + 12 个月格子。
+  ///
+  /// 为什么不用下拉：月份一多（三年就 36 项）下拉列表要滚很久，
+  /// 而且"哪个月有记录"完全看不出来，只能盲选。格子铺开后一眼看全，
+  /// 没记录的月份直接置灰点不动。
+  Future<int?> _pickPeriod(
+    List<MonthSummary> periods, {
+    required int exclude,
+    required int initial,
+    required Set<int> selected,
+  }) {
+    final byKey = {for (final m in periods) _keyOf(m): m};
+    final years = periods.map((e) => e.year).toSet().toList()
+      ..sort((a, b) => b.compareTo(a));
+    var year = initial ~/ 100;
+    if (!years.contains(year)) year = years.first;
+
+    return showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: kSurface,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('选择月份',
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 10),
+                if (years.length > 1)
+                  SizedBox(
+                    height: 34,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: years.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (_, i) {
+                        final y = years[i];
+                        final selected = y == year;
+                        return GestureDetector(
+                          onTap: () => setSheet(() => year = y),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: selected ? kSeed : kSurfaceAlt,
+                              borderRadius: BorderRadius.circular(17),
+                            ),
+                            child: Text(
+                              '$y 年',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                color: selected ? Colors.white : kTextMedium,
+                                fontWeight:
+                                    selected ? FontWeight.w600 : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                if (years.length > 1) const SizedBox(height: 12),
+                GridView.count(
+                  crossAxisCount: 4,
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 1.5,
+                  children: [
+                    for (var m = 1; m <= 12; m++)
+                      _monthCell(
+                        ctx,
+                        year: year,
+                        month: m,
+                        summary: byKey[year * 100 + m],
+                        isOtherSide: year * 100 + m == exclude,
+                        selected: selected.contains(year * 100 + m),
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _monthCell(
+    BuildContext sheetCtx, {
+    required int year,
+    required int month,
+    required MonthSummary? summary,
+    required bool isOtherSide,
+    required bool selected,
+  }) {
+    final key = year * 100 + month;
+    // 没记录的月份、以及另一侧已经选中的月份都不让点（两边同一期没有意义）
+    final enabled = summary != null && !isOtherSide;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: enabled ? () => Navigator.pop(sheetCtx, key) : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: enabled ? (selected ? kInfoBg : kSurfaceAlt) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected && enabled ? kSeed : Colors.transparent,
+          ),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '$month 月',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: enabled ? FontWeight.w600 : FontWeight.normal,
+                color: enabled ? kTextPrimary : kTextFaint,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              summary == null
+                  ? '—'
+                  : (isOtherSide ? '已选' : displayCents(summary.monthlyNet)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10,
+                color: enabled ? kTextHint : kTextFaint,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
