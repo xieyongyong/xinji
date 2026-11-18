@@ -3,6 +3,13 @@ import '../data/models.dart';
 import 'line_builder.dart';
 import 'ocr_models.dart';
 
+/// 字高超过正文中位数的多少倍，就算「头图大号数字」而不是明细金额。
+///
+/// 奖金条顶部会把实发金额用两三倍大的字印一遍，那是给人看的展示，不是明细；
+/// 但也有公司的工资条金额字体本来就比标签大，所以还要再叠一条
+/// 「有没有落在金额列里」的判据（见 `_ColumnContext.isDisplayCell`）。
+const double _kDisplayHeightRatio = 1.8;
+
 /// 把「视觉行」解析成「项目名 + 值」，并判定每行是明细、合计、信息项还是噪声。
 ///
 /// 这里的所有规则都是为了应对真实工资条截图的脏数据：
@@ -104,9 +111,12 @@ class FieldParser {
     required String rawText,
   }) {
     final visualRows = LineBuilder.build(lines);
-    final skip = _watermarkTexts(visualRows);
+    // 正文行高中位数：用来把「头图大号数字」和正文分开。
+    // 奖金条顶部那个 24540 是展示用的，被当成明细金额会凭空多出一笔收入。
+    final bodyHeight = _medianHeight(visualRows);
+    final skip = _watermarkTexts(visualRows, bodyHeight);
     final fragments = _watermarkFragments(skip);
-    final ctx = _ColumnContext.of(visualRows, skip);
+    final ctx = _ColumnContext.of(visualRows, skip, bodyHeight);
     final rows = <ParsedRow>[];
     for (final vr in visualRows) {
       final row = _parseRow(vr, index, ctx, skip, fragments);
@@ -121,6 +131,19 @@ class FieldParser {
       periodYear: period?.year,
       periodMonth: period?.month,
     );
+  }
+
+  /// 全图文本片段的行高中位数（正文的字高）
+  double _medianHeight(List<VisualRow> rows) {
+    final hs = <double>[];
+    for (final row in rows) {
+      for (final c in row.cells) {
+        if (c.text.trim().length >= 2 && c.height > 0) hs.add(c.height);
+      }
+    }
+    if (hs.isEmpty) return 0;
+    hs.sort();
+    return hs[hs.length ~/ 2];
   }
 
   /// 从标题行认出这笔工资的归属年月。
@@ -154,35 +177,63 @@ class FieldParser {
   ///
   /// 注：像素层的浅灰水印已经由原生 `TileCleaner` 在识别前刷白了，
   /// 这里兜的是「水印比纸面深、刷不掉」以及「水印和正文黏成一串」的情况。
-  Set<String> _watermarkTexts(List<VisualRow> rows) {
+  Set<String> _watermarkTexts(List<VisualRow> rows, double bodyHeight) {
     // 同一串文字重复这么多次 → 判定为水印
     const sameTextTimes = 3;
     // 5 个字以上的长串只要重复两次就够了：真实项目名不会一模一样出现两回
     const sameLongTextTimes = 2;
+    // 但**纯数字**必须严格得多：水印编号（"1279"）在一张纸上重复七八次，
+    // 而真实金额本来就会重复印刷 —— 年终奖条上「2025年终奖金 / 应发奖金合计 /
+    // 本次应发奖金」三行印的就是同一个数，按长串规则会被整片当水印删掉，
+    // 最后整张纸只剩「个税」一项。这是真实踩过的坑。
+    const sameNumberTimes = 5;
 
     final freq = <String, int>{};
     final raw = <String, List<String>>{};
+    final rights = <String, List<double>>{};
     for (final row in rows) {
       for (final c in row.cells) {
         final t = c.text.trim();
         if (t.length < 3) continue;
+        // 头图那个大号数字（两三倍于正文的字高）是装饰，不是水印也不是金额
+        if (bodyHeight > 0 && c.height > bodyHeight * _kDisplayHeightRatio) continue;
         // 归一化再计数："安心工资条 1279" 和 "安心工资条1279" 要算同一串，
         // 否则 OCR 多认/少认一个空格就漏过去了。
         final key = _watermarkKey(t);
         if (!_couldBeWatermark(t, key)) continue;
         freq[key] = (freq[key] ?? 0) + 1;
         (raw[key] ??= <String>[]).add(t);
+        (rights[key] ??= <double>[]).add(c.right);
       }
     }
 
     final out = <String>{};
     for (final e in freq.entries) {
       final key = e.key;
-      final hit = e.value >= sameTextTimes ||
-          (key.length >= 5 && e.value >= sameLongTextTimes);
+      final bool hit;
+      if (RegExp(r'^\d+$').hasMatch(key)) {
+        // 数字多一道判据：真实金额右对齐成一列，水印编号斜着铺、每次位置都不同
+        hit = e.value >= sameNumberTimes ||
+            (e.value >= sameTextTimes && _scattered(rights[key]!));
+      } else {
+        hit = e.value >= sameTextTimes ||
+            (key.length >= 5 && e.value >= sameLongTextTimes);
+      }
       if (hit) out.addAll(raw[key]!);
     }
     return out;
+  }
+
+  /// 同一串文字的右边界是不是"到处都是"（水印），而不是排成一列（金额列）
+  bool _scattered(List<double> rights) {
+    if (rights.length < 2) return false;
+    var lo = rights.first;
+    var hi = rights.first;
+    for (final r in rights) {
+      if (r < lo) lo = r;
+      if (r > hi) hi = r;
+    }
+    return (hi - lo) > 8;
   }
 
   /// 计数的归一化键：去掉空白和标点，只留字与数字
@@ -256,8 +307,29 @@ class FieldParser {
     Set<String> skip,
     Set<String> fragments,
   ) {
-    final cells = row.cells.where((c) => !skip.contains(c.text.trim())).toList();
-    if (cells.isEmpty) return null;
+    // 去水印 + 去「头图大号数字」（后者是装饰，不是明细金额）
+    final kept = row.cells
+        .where((c) => !skip.contains(c.text.trim()))
+        .where((c) => !ctx.isDisplayCell(c))
+        .toList();
+    if (kept.isEmpty) return null;
+
+    // 名字整格被当成水印删掉时救回来。
+    //
+    // 奖金条的标题和项目名常常一模一样（都叫「2025年终奖金」），标题那一份
+    // 会让这串文字被判成"重复出现的水印"，于是这一行名字没了、只剩金额，
+    // 最后被当中"孤立数字"丢掉。可这一行明明有金额 —— 金额在，名字就必须在。
+    var cells = kept;
+    if (!kept.any((c) => !looksLikeAmount(c.text.trim()))) {
+      final back = row.cells
+          .where((c) => skip.contains(c.text.trim()) && !ctx.isDisplayCell(c))
+          // 只借名字回来：数字水印借回来会被当成这一行的金额
+          .where((c) => !looksLikeAmount(c.text.trim()))
+          .toList();
+      if (back.isNotEmpty) {
+        cells = [...back, ...kept]..sort((a, b) => a.left.compareTo(b.left));
+      }
+    }
 
     final text = cells.map((e) => e.text.trim()).where((e) => e.isNotEmpty).join(' ');
     if (text.isEmpty) return null;
@@ -622,9 +694,24 @@ class _ColumnContext {
   final double? amountRight;
   final double? firstStrictTop;
 
-  const _ColumnContext(this.amountRight, this.firstStrictTop);
+  /// 正文行高中位数。远大于它的片段是「头图大号数字」，不算金额。
+  final double bodyHeight;
 
-  factory _ColumnContext.of(List<VisualRow> rows, Set<String> skip) {
+  const _ColumnContext(this.amountRight, this.firstStrictTop, this.bodyHeight);
+
+  /// 是不是「头图大号数字」之类的装饰性大字。
+  ///
+  /// 除了"字高够大"，还要求它**不在金额列上**：有的公司把金额印得比标签大，
+  /// 只看字高会把整列金额误删；而落在金额列里的，一律当正文。
+  bool isDisplayCell(RawLine c) {
+    if (bodyHeight <= 0) return false;
+    if (c.height <= bodyHeight * _kDisplayHeightRatio) return false;
+    final right = amountRight;
+    if (right != null && (c.right - right).abs() <= 26) return false;
+    return true;
+  }
+
+  factory _ColumnContext.of(List<VisualRow> rows, Set<String> skip, double bodyHeight) {
     final rights = <double>[];
     double? firstTop;
     for (final row in rows) {
@@ -637,8 +724,8 @@ class _ColumnContext {
         }
       }
     }
-    if (rights.isEmpty) return const _ColumnContext(null, null);
+    if (rights.isEmpty) return _ColumnContext(null, null, bodyHeight);
     rights.sort();
-    return _ColumnContext(rights[rights.length ~/ 2], firstTop);
+    return _ColumnContext(rights[rights.length ~/ 2], firstTop, bodyHeight);
   }
 }

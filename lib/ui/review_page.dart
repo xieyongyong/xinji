@@ -229,7 +229,7 @@ class _ReviewPageState extends State<ReviewPage> {
     final tpl = appState.activeTemplateFor(_employerId, appliesTo: _recordType);
     _template = tpl;
     if (editing == null && tpl != null) {
-      _prefillFromTemplate(tpl, onlyMissing: widget.outcome != null);
+      _prefillFromTemplate(tpl);
     }
 
     // 3.5) 顺序：不管数据来自 OCR、模板预填还是历史记录，
@@ -257,14 +257,26 @@ class _ReviewPageState extends State<ReviewPage> {
       ..addAll(infos);
   }
 
-  /// 用模板预填字段。
-  ///
-  /// [onlyMissing] = true 时只补缺失项（OCR 场景，识别结果优先）。
-  void _prefillFromTemplate(SalaryTemplate tpl, {required bool onlyMissing}) {
-    final existItems = _items.map((e) => normalizeName(e.name)).toSet();
+  /// 用模板预填字段：只补识别结果里没有的项（识别结果优先）。
+  void _prefillFromTemplate(SalaryTemplate tpl) {
+    // 比对要按「项目模板里的标准名」来：模板字段叫「本次应发奖金」、
+    // 识别结果叫「应发奖金合计」，其实是同一笔钱（奖金条上就是同一个数）。
+    // 只按字面比会让它在旁边补一行 0，看起来像"这月没发奖金"。
+    final dict = context.read<AppState>().templates;
+    String canon(String name) {
+      final n = normalizeName(name);
+      if (n.isEmpty) return n;
+      for (final t in dict) {
+        if (t.matches(n)) return normalizeName(t.name);
+      }
+      return n;
+    }
+
+    final existItems = _items.map((e) => canon(e.name)).toSet();
     for (final f in [...tpl.incomeFields, ...tpl.deductionFields]) {
-      if (onlyMissing && existItems.contains(normalizeName(f.name))) continue;
-      if (existItems.contains(normalizeName(f.name))) continue;
+      final key = canon(f.name);
+      if (existItems.contains(key)) continue;
+      existItems.add(key);
       _items.add(PayItemDraft(
         name: f.name,
         category: f.category,
@@ -311,7 +323,7 @@ class _ReviewPageState extends State<ReviewPage> {
       final tpl = appState.activeTemplateFor(_employerId, appliesTo: v);
       _template = tpl;
       if (!_isEdit && tpl != null) {
-        _prefillFromTemplate(tpl, onlyMissing: true);
+        _prefillFromTemplate(tpl);
         _normalizeOrder();
         _applyPerfFormula();
       }

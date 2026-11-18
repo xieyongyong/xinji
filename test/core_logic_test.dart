@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xinji/core/money.dart';
+import 'package:xinji/data/models.dart';
 import 'package:xinji/ocr/field_parser.dart';
 import 'package:xinji/ocr/merge_engine.dart';
 import 'package:xinji/ocr/ocr_models.dart';
@@ -242,14 +243,123 @@ void main() {
         isTrue,
       );
     });
+
+    // 真实截图（2025年终奖金，奔图）：同一个数印了三遍 + 铺满水印。
+    // 曾经的 bug：水印规则把"重复出现"当成水印，25299 印三次就被整片删掉，
+    // 于是整张纸只剩「个税」一项 —— 用户看到的就是"只识别出个税"。
+    test('年终奖条：同一个数印三遍，不能被当成水印删掉', () {
+      final templates = [
+        ItemTemplate(
+          name: '应发奖金合计',
+          category: kCategoryIncome,
+          aliases: ['本次应发奖金', '年终奖金'],
+        ),
+        ItemTemplate(name: '个人所得税', category: kCategoryDeduction, aliases: ['个税']),
+      ];
+      final parser = FieldParser(templates);
+
+      final lines = <RawLine>[
+        raw('2025年终奖金', 0, left: 4), // 顶部标题，和下面项目名一模一样
+        raw('24540', 3, left: 120, h: 46), // 头图大号数字，是装饰不是明细
+        raw('工号', 6, left: 4),
+        raw('199438', 6, left: 200),
+        raw('2025年终奖金', 7, left: 4),
+        raw('25299', 7, left: 200),
+        raw('应发奖金合计', 8, left: 4),
+        raw('25299', 8, left: 200),
+        raw('本次应发奖金', 9, left: 4),
+        raw('25299', 9, left: 200),
+        raw('个税', 10, left: 4),
+        raw('759', 10, left: 210),
+        raw('实发奖金', 11, left: 4),
+        raw('24540', 11, left: 200),
+        // 浅灰水印：斜着铺，位置每次都不一样，重复次数远多于真实金额
+        raw('1279', 6, left: 118),
+        raw('1279', 7, left: 330),
+        raw('1279', 8, left: 60),
+        raw('1279', 9, left: 250),
+        raw('1279', 10, left: 150),
+        raw('1279', 11, left: 320),
+        raw('安心工资条', 6, left: 300),
+        raw('安心工资条', 8, left: 300),
+      ];
+
+      final img = parser.parseImage(
+        index: 0,
+        filePath: 'a.jpg',
+        rawText: '',
+        lines: lines,
+      );
+
+      // 三行印的是同一笔钱，都识别到了，归一到模板里的同一个项目名
+      final bonus = img.rows.where((e) => e.name == '应发奖金合计').toList();
+      expect(bonus.length, 3);
+      expect(bonus.every((e) => e.amountCents == 2529900), isTrue,
+          reason: '金额不能被水印规则吞掉');
+
+      final tax = img.rows.firstWhere((e) => e.name.contains('所得税'));
+      expect(tax.kind, ParsedRowKind.item);
+      expect(tax.amountCents, 75900);
+
+      final net = img.rows.firstWhere((e) => e.name.contains('实发奖金'));
+      expect(net.kind, ParsedRowKind.totalNet);
+      expect(net.amountCents, 2454000);
+
+      // 头图那个大号 24540 不能变成第二笔收入，水印编号也不能变成金额
+      expect(img.rows.where((e) => e.amountCents == 2454000).length, 1);
+      expect(img.rows.where((e) => e.amountCents == 127900).isEmpty, isTrue);
+    });
+
+    test('年终奖条合并后：收入只算一笔，实发能对上', () {
+      final templates = [
+        ItemTemplate(
+          name: '应发奖金合计',
+          category: kCategoryIncome,
+          aliases: ['本次应发奖金', '年终奖金'],
+        ),
+        ItemTemplate(name: '个人所得税', category: kCategoryDeduction, aliases: ['个税']),
+      ];
+      final img = FieldParser(templates).parseImage(
+        index: 0,
+        filePath: 'a.jpg',
+        rawText: '',
+        lines: [
+          raw('2025年终奖金', 0, left: 4),
+          raw('2025年终奖金', 7, left: 4),
+          raw('25299', 7, left: 200),
+          raw('应发奖金合计', 8, left: 4),
+          raw('25299', 8, left: 200),
+          raw('本次应发奖金', 9, left: 4),
+          raw('25299', 9, left: 200),
+          raw('个税', 10, left: 4),
+          raw('759', 10, left: 210),
+          raw('实发奖金', 11, left: 4),
+          raw('24540', 11, left: 200),
+        ],
+      );
+
+      final merged = MergeEngine(templates).merge([img]);
+
+      expect(merged.items.where((e) => e.isIncome).length, 1, reason: '不能算三遍');
+      expect(merged.grossCents, 2529900);
+      expect(merged.deductionTotalCents, 75900);
+      expect(merged.netCents, 2454000);
+      expect(
+        merged.issues.any((e) => e.type == MergeIssueType.totalMismatch),
+        isFalse,
+        reason: '25299 - 759 = 24540，应该能对上',
+      );
+    });
   });
 }
 
 /// 造一个 OCR 文本片段（同一 top 的两个片段会被 LineBuilder 合成一行）
-RawLine raw(String text, int row, {required double left}) => RawLine(
+///
+/// [h] 是字高：真实截图里「头图大号数字」的字高是正文的两三倍。
+RawLine raw(String text, int row, {required double left, double h = 20}) => RawLine(
       text: text,
       left: left,
       right: left + 90,
       top: 10.0 + row * 30,
-      bottom: 30.0 + row * 30,
+      bottom: 10.0 + row * 30 + h,
     );

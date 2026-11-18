@@ -156,5 +156,9 @@ String normalizeName(String raw) {
   s = s.replaceAll(RegExp(r'\(.*?\)'), '');
   s = s.replaceAll('金额', '');
   s = s.replaceAll('本月', '');
+  // 「2025年终奖金」这类带年份前缀的行：奖金条的标题往往就是项目名，
+  // 不去掉年份就跟模板里的「年终奖金」别名对不上，会被当成另一笔收入，
+  // 收入直接翻倍（年终奖条上同一个数还印了三遍，翻三倍）。
+  s = s.replaceFirst(RegExp(r'^20\d{2}年'), '');
   return s;
 }
