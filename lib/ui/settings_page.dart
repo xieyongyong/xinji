@@ -483,39 +483,6 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
-              _sectionTitle('备份与恢复'),
-              _card([
-                _item(
-                  icon: Icons.enhanced_encryption_outlined,
-                  title: '导出加密备份',
-                  subtitle: '需要密码才能恢复，适合传到网盘或发给自己',
-                  onTap: () => _exportBackup(encrypted: true),
-                ),
-                const Divider(height: 1),
-                _item(
-                  icon: Icons.folder_zip_outlined,
-                  title: '导出明文备份',
-                  subtitle: 'ZIP 里含 CSV，可以直接用 Excel 打开看',
-                  onTap: () => _exportBackup(encrypted: false),
-                ),
-                const Divider(height: 1),
-                _item(
-                  icon: Icons.restore,
-                  title: '从备份恢复',
-                  subtitle: '⚠️ 会覆盖当前全部数据',
-                  onTap: _restoreBackup,
-                ),
-                const Divider(height: 1),
-                _item(
-                  icon: Icons.cloud_outlined,
-                  title: '云盘备份（WebDAV）',
-                  subtitle: '传到自己的坚果云 / NAS，默认关闭',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const CloudBackupPage()),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 18),
               _sectionTitle('雇主'),
               _card([
                 _item(
@@ -633,6 +600,46 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: '下跌颜色',
                   current: settings.downColor,
                   onPick: (argb) => settings.setDownColor(argb),
+                ),
+              ]),
+              const SizedBox(height: 18),
+              _sectionTitle('备份与恢复'),
+              _card([
+                _item(
+                  icon: Icons.enhanced_encryption_outlined,
+                  title: '导出加密备份',
+                  subtitle: '需要密码才能恢复，适合传到网盘或发给自己',
+                  onTap: () => _exportBackup(encrypted: true),
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.folder_zip_outlined,
+                  title: '导出明文备份',
+                  subtitle: 'ZIP 里含 CSV，可以直接用 Excel 打开看',
+                  onTap: () => _exportBackup(encrypted: false),
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.restore,
+                  title: '从备份恢复',
+                  subtitle: '⚠️ 会覆盖当前全部数据',
+                  onTap: _restoreBackup,
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.cloud_outlined,
+                  title: '云盘备份（WebDAV）',
+                  subtitle: '传到自己的坚果云 / NAS，默认关闭',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const CloudBackupPage()),
+                  ),
+                ),
+                const Divider(height: 1),
+                _item(
+                  icon: Icons.cleaning_services_outlined,
+                  title: '清理更新缓存',
+                  subtitle: '删除下载的安装包与残留，日常更新不用管，磁盘紧张时点一下',
+                  onTap: _clearUpdateCache,
                 ),
               ]),
               const SizedBox(height: 18),
@@ -788,42 +795,89 @@ class _SettingsPageState extends State<SettingsPage> {
   /// 2. `ocr_trace.log` —— 识别进程写的一行行面包屑，最后一行就是崩在哪一步。
   /// 3. `crash.log` —— Dart 层能抓到的异常。
   Future<void> _showDiagnostics() async {
-    final text = await _collectDiagnostics();
+    var text = await _collectDiagnostics();
     if (!mounted) return;
-    final lines = text.split('\n');
-    final tail = lines.length > 240
-        ? lines.sublist(lines.length - 240).join('\n')
-        : text;
+
     await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('诊断日志'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: 380,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              tail.trim().isEmpty ? '暂无记录。说明还没发生过异常。' : tail,
-              style: const TextStyle(fontSize: 10.5, height: 1.5),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final lines = text.split('\n');
+          final tail = lines.length > 240
+              ? lines.sublist(lines.length - 240).join('\n')
+              : text;
+          return AlertDialog(
+            title: const Text('诊断日志'),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 380,
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  tail.trim().isEmpty ? '暂无记录。说明还没发生过异常。' : tail,
+                  style: const TextStyle(fontSize: 10.5, height: 1.5),
+                ),
+              ),
             ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await CrashLog.clear();
-              if (ctx.mounted) Navigator.pop(ctx);
-              setState(() {});
-            },
-            child: const Text('清空'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('关闭'),
-          ),
-        ],
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await _clearDiagnostics();
+                  text = await _collectDiagnostics();
+                  if (ctx.mounted) setDialogState(() {});
+                },
+                child: const Text('清空'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
       ),
     );
+  }
+
+  /// 清理更新缓存：删掉 update/ 目录里所有安装包和 .part 残留。
+  /// 正在下载的 .part 原生侧会跳过（不会打断后台下载）。
+  Future<void> _clearUpdateCache() async {
+    final busyDialog = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const PopScope(
+        canPop: false,
+        child: Center(child: CircularProgressIndicator()),
+      ),
+    );
+    final freed = await UpdateChecker.clearUpdateCache();
+    if (mounted) Navigator.of(context).pop(); // 关掉 busy 弹窗
+    await busyDialog;
+    if (!mounted) return;
+    final mb = freed / 1024 / 1024;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(freed <= 0
+            ? '没有需要清理的更新缓存'
+            : '已清理更新缓存，释放 ${mb.toStringAsFixed(1)} MB'),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// 三个来源一起清：crash.log（Dart 异常）、last_exit.txt（系统退出原因）、
+  /// ocr_trace.log（识别面包屑）。以前只删 crash.log，另外两个还在，
+  /// 下次打开又读回来，看起来就是"点了清空没反应"。
+  Future<void> _clearDiagnostics() async {
+    await CrashLog.clear();
+    try {
+      final dir = await getApplicationSupportDirectory();
+      for (final name in ['last_exit.txt', 'ocr_trace.log']) {
+        final f = File('${dir.path}/$name');
+        if (await f.exists()) await f.delete();
+      }
+    } catch (_) {
+      // 清不掉也不能让弹窗崩；能清几个是几个
+    }
   }
 
   /// 拼装诊断信息。任何一步读不到都跳过，绝不因为诊断本身抛异常

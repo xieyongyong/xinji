@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -46,6 +48,7 @@ class XinJiApp extends StatefulWidget {
 
 class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
   DateTime? _pausedAt;
+  Timer? _maskTimer;
 
   @override
   void initState() {
@@ -55,24 +58,36 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _maskTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  /// 延迟盖遮罩：paused 后 200ms 再盖，期间若回到前台就取消。
+  /// 这样系统弹窗、侧滑工具箱这类"瞬间 inactive/paused 又立刻回来"的操作
+  /// 不会闪一下遮罩；真正切后台（停留超过 200ms）才会盖住。
+  void _scheduleMask() {
+    _maskTimer?.cancel();
+    if (!widget.settings.privacyMask) return;
+    _maskTimer = Timer(const Duration(milliseconds: 200), () {
+      widget.lock.mask();
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.inactive:
-        // inactive 比 paused 早一步：先盖住画面，系统拍最近任务缩略图时
-        // 拍到的就是遮罩而不是工资明细。
-        if (widget.settings.privacyMask) widget.lock.mask();
+        // 不再在这里盖：下拉通知栏、侧滑工具箱、系统弹窗都会让 App 进入
+        // inactive，但人还在看屏幕，盖住反而挡事。真正的后台在 paused/hidden。
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
         _pausedAt = DateTime.now();
-        if (widget.settings.privacyMask) widget.lock.mask();
+        _scheduleMask();
         break;
       case AppLifecycleState.resumed:
+        _maskTimer?.cancel();
         final paused = _pausedAt;
         _pausedAt = null;
         if (paused != null) {
@@ -148,28 +163,42 @@ class _PrivacyMask extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: kScaffold,
+      // 柔和渐变底，深色/浅色各一套；比原来的纯色块更像"锁屏"而不是"出错"
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: dark
+              ? [const Color(0xFF0E1320), const Color(0xFF1A2233)]
+              : [const Color(0xFFF5F7FB), const Color(0xFFE8ECF5)],
+        ),
+      ),
       alignment: Alignment.center,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 64,
-            height: 64,
+            width: 88,
+            height: 88,
             decoration: BoxDecoration(
-              color: kSurfaceAlt,
-              borderRadius: BorderRadius.circular(18),
+              shape: BoxShape.circle,
+              color: kSeed.withOpacity(dark ? 0.16 : 0.10),
+              border: Border.all(color: kSeed.withOpacity(0.35), width: 1.5),
             ),
-            child: Icon(Icons.visibility_off_outlined, size: 30, color: kTextSecondary),
+            child: Icon(Icons.lock_outlined, size: 38, color: kSeed),
           ),
-          const SizedBox(height: 14),
-          Text('薪迹 · 内容已隐藏',
+          const SizedBox(height: 20),
+          Text('薪迹',
               style: TextStyle(
-                  fontSize: 14, fontWeight: FontWeight.w600, color: kTextBody)),
-          const SizedBox(height: 6),
-          Text('回到应用后自动显示',
-              style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2,
+                  color: kTextPrimary)),
+          const SizedBox(height: 8),
+          Text('内容已隐藏 · 回到应用后自动显示',
+              style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
         ],
       ),
     );

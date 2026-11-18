@@ -146,16 +146,33 @@ double? parseCoefficient(String raw) {
   return v;
 }
 
+/// 文本归一化用到的正则。提成顶层常量：模板匹配时按「行 × 模板 × 别名」
+/// 放大调用，每次现建 RegExp 是白费的开销。
+final class _NamePatterns {
+  static final colonSpace = RegExp(r'[：:\s]');
+  static final paren = RegExp(r'\(.*?\)');
+  static final yearPrefix = RegExp(r'^20\d{2}年?');
+}
+
+/// 归一化结果缓存。项目名高度重复（同一份工资条几十行、跨月又是同一批名字），
+/// 缓存后基本都是命中；上限防护避免极端情况下无限增长。
+final Map<String, String> _normalizeCache = <String, String>{};
+final Map<String, List<String>> _variantsCache = <String, List<String>>{};
+const int _nameCacheMax = 2000;
+
 /// 文本归一化：用于项目名比较（合并重复行、跨月对比对齐）
 String normalizeName(String raw) {
+  final cached = _normalizeCache[raw];
+  if (cached != null) return cached;
   var s = raw.trim().toUpperCase();
   // 全角括号 -> 半角
   s = s.replaceAll('（', '(').replaceAll('）', ')');
   // 去掉常见噪声：末尾冒号、空白、括号内容里的编号、"金额"字样
-  s = s.replaceAll(RegExp(r'[：:\s]'), '');
-  s = s.replaceAll(RegExp(r'\(.*?\)'), '');
+  s = s.replaceAll(_NamePatterns.colonSpace, '');
+  s = s.replaceAll(_NamePatterns.paren, '');
   s = s.replaceAll('金额', '');
   s = s.replaceAll('本月', '');
+  if (_normalizeCache.length < _nameCacheMax) _normalizeCache[raw] = s;
   return s;
 }
 
@@ -168,10 +185,12 @@ String normalizeName(String raw) {
 ///
 /// 注意：这只是**匹配用的候选**，不要拿它当存储键，否则同一个月会出现两行。
 List<String> nameVariants(String raw) {
+  final cached = _variantsCache[raw];
+  if (cached != null) return cached;
   final n = normalizeName(raw);
   if (n.isEmpty) return const [];
   final out = <String>{n};
-  final m = RegExp(r'^20\d{2}年?').firstMatch(n);
+  final m = _NamePatterns.yearPrefix.firstMatch(n);
   if (m != null) {
     final rest = n.substring(m.end);
     if (rest.length >= 2) {
@@ -180,5 +199,7 @@ List<String> nameVariants(String raw) {
       if (m.group(0)!.endsWith('年')) out.add('年$rest');
     }
   }
-  return out.toList();
+  final result = out.toList();
+  if (_variantsCache.length < _nameCacheMax) _variantsCache[raw] = result;
+  return result;
 }

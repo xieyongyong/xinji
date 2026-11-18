@@ -23,6 +23,14 @@ class MainActivity : FlutterFragmentActivity() {
         // 主进程启动时记一笔「上次是谁怎么死的」，设置页的诊断日志会读到它。
         // native 崩溃抓不到 Dart 异常，只有系统这份记录能说清原因。
         ExitReasons.capture(applicationContext)
+        // 新版启动后清理更新缓存：只留当前版本的 apk，跨版本旧包和过期 .part 全删。
+        // 放后台线程，别拖慢首帧；正在下载的 .part 内部会跳过。
+        Thread {
+            try {
+                UpdateCache.cleanOnStartup(applicationContext, AppChannel.currentVersionName(applicationContext))
+            } catch (_: Throwable) {
+            }
+        }.start()
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

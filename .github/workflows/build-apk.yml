@@ -96,6 +96,10 @@ jobs:
           flutter build apk --release --build-number=${{ github.run_number }} --build-name=$VERSION
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/xinji.apk
+          # 校验文件：App 下载完用它核对 APK 完整性（防止第三方代理返回错误页/截断包）
+          # 内容形如 "<64位哈希>  xinji.apk"，App 只取第一段哈希
+          (cd dist && sha256sum xinji.apk > xinji.apk.sha256)
+          echo "SHA256: $(cat dist/xinji.apk.sha256)"
           ls -lh dist/
 
       - name: 检查安装包内容（模型 / 原生库）
@@ -170,7 +174,11 @@ jobs:
 
             > 这个包会一直留着。回退时先「设置 → 备份与恢复」导出备份，
             > 再卸载装旧版本（Android 不允许版本号倒退覆盖安装）。
-          files: dist/xinji.apk
+
+            SHA-256 校验值见 xinji.apk.sha256，下载后可核对完整性。
+          files: |
+            dist/xinji.apk
+            dist/xinji.apk.sha256
           overwrite_files: true
           make_latest: true
         env:
@@ -191,7 +199,9 @@ jobs:
             版本：${{ env.VERSION }}
             提交：${{ github.sha }}
             时间：${{ env.BUILD_TIME }}
-          files: dist/xinji.apk
+          files: |
+            dist/xinji.apk
+            dist/xinji.apk.sha256
           overwrite_files: true
           make_latest: false
           prerelease: false

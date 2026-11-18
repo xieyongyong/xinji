@@ -374,6 +374,10 @@ class ItemTemplate {
   final int sortOrder;
   final bool enabled;
 
+  /// matches 每次都要把 name + aliases 归一化成目标集合；模板字段不可变，
+  /// 算一次缓存起来。识别时按「行 × 模板」放大，省下的开销很可观。
+  Set<String>? _matchTargets;
+
   ItemTemplate({
     this.id,
     required this.name,
@@ -391,11 +395,14 @@ class ItemTemplate {
   bool matches(String rawName) {
     final candidates = nameVariants(rawName);
     if (candidates.isEmpty) return false;
-    final targets = <String>{normalizeName(name)};
-    for (final a in aliases) {
-      final k = normalizeName(a);
-      if (k.isNotEmpty) targets.add(k);
-    }
+    final targets = _matchTargets ??= () {
+      final s = <String>{normalizeName(name)};
+      for (final a in aliases) {
+        final k = normalizeName(a);
+        if (k.isNotEmpty) s.add(k);
+      }
+      return s;
+    }();
     return candidates.any(targets.contains);
   }
 

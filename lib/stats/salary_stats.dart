@@ -269,13 +269,19 @@ class MonthComparison {
 
 /// 统计构建器
 class StatsBuilder {
-  /// 把某年的记录聚合成年度视图
+  /// 把某年的记录聚合成年度视图。
+  ///
+  /// 原来每月都 `where` 全表扫一遍（12 次 × N 条），首页年份弹窗又按年调用
+  /// N 次，等于 12×年数×记录数。这里改成一次遍历按月份分桶，O(记录数 + 12)。
   static YearSummary buildYear(List<PayRecord> allRecords, int year) {
+    final byMonth = <int, List<PayRecord>>{};
+    for (final r in allRecords) {
+      if (r.periodYear != year) continue;
+      byMonth.putIfAbsent(r.periodMonth, () => []).add(r);
+    }
     final months = <MonthSummary>[];
     for (var m = 1; m <= 12; m++) {
-      final inMonth = allRecords
-          .where((r) => r.periodYear == year && r.periodMonth == m)
-          .toList();
+      final inMonth = byMonth[m] ?? const <PayRecord>[];
       months.add(MonthSummary(
         year: year,
         month: m,

@@ -20,6 +20,10 @@ Future<bool> showUpdateDialog(
   required String currentVersion,
   bool auto = false,
 }) async {
+  // 线路选择放在弹窗内，默认读用户上次选的（首次是 gh-proxy.com）
+  String lineId = await UpdateChecker.preferredLineId();
+  if (!context.mounted) return false;
+
   final choice = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -66,6 +70,61 @@ Future<bool> showUpdateDialog(
                 '下载完在首页点一下即可安装，数据原样保留。',
                 style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
               ),
+              const SizedBox(height: 12),
+              // 线路选择：StatefulBuilder 只重建这一小块，不动外面的 release 文案
+              StatefulBuilder(
+                builder: (dialogCtx, setDialogState) => Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: kSurfaceAlt,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.alt_route, size: 14, color: kTextSecondary),
+                          const SizedBox(width: 6),
+                          Text('下载线路（失败会自动换下一条）',
+                              style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          for (final l in UpdateChecker.lines)
+                            ChoiceChip(
+                              label: Text(l.label,
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      color: lineId == l.id
+                                          ? Colors.white
+                                          : kTextBody)),
+                              selected: lineId == l.id,
+                              selectedColor: kSeed,
+                              backgroundColor: kSurface,
+                              visualDensity: VisualDensity.compact,
+                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              onSelected: (_) async {
+                                setDialogState(() => lineId = l.id);
+                                await UpdateChecker.setPreferredLine(l.id);
+                              },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '默认 gh-proxy.com 加速；选「官方直链」则直接从 GitHub 下载。'
+                        '第三方代理能看到你的下载请求，介意的话请选官方直链。',
+                        style: TextStyle(fontSize: 10.5, height: 1.5, color: kTextHint),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -107,7 +166,7 @@ Future<bool> showUpdateDialog(
   }
 
   try {
-    await UpdateDownloadController.instance.start(release);
+    await UpdateDownloadController.instance.start(release, preferredLine: lineId);
   } catch (e) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

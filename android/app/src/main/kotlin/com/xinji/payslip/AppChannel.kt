@@ -33,12 +33,14 @@ object AppChannel {
 
     fun handle(call: MethodCall, result: MethodChannel.Result, context: Context) {
         when (call.method) {
-            "version" -> result.success(versionName(context))
+            "version" -> result.success(currentVersionName(context))
 
             "download" -> {
-                val url = call.argument<String>("url")
+                val urls = call.argument<List<String>>("urls")
+                    ?.map { it.trim() }?.filter { it.isNotEmpty() }
                 val version = call.argument<String>("version") ?: "新版本"
-                if (url.isNullOrBlank()) {
+                val sha256 = call.argument<String>("sha256")?.trim()?.ifBlank { null }
+                if (urls.isNullOrEmpty()) {
                     result.error("app_bad_args", "缺少下载地址", null)
                     return
                 }
@@ -59,7 +61,7 @@ object AppChannel {
                         }
                     }
                 }
-                startUpdateDownload(context.applicationContext, url, version)
+                startUpdateDownload(context.applicationContext, urls, version, sha256)
                 result.success(true)
             }
 
@@ -81,15 +83,21 @@ object AppChannel {
                     result.error("app_not_ready", "还没有下载完成的安装包", null)
                     return
                 }
-                val i = Intent(context, UpdateDownloadService::class.java)
-                    .setAction(UpdateDownloadService.ACTION_INSTALL)
-                    .putExtra(UpdateDownloadService.EXTRA_PATH, path)
+                // 从前台 Activity 拉起透明入口，再由它调系统安装器。
+                // 不能从 Service 直接 startActivity：Android 10+ 后台启动会被拦。
                 try {
-                    context.startService(i)
+                    val i = Intent(context, InstallLauncherActivity::class.java)
+                        .putExtra(UpdateDownloadService.EXTRA_PATH, path)
+                    context.startActivity(i)
                     result.success(true)
                 } catch (t: Throwable) {
                     result.error("app_install_failed", t.message, null)
                 }
+            }
+
+            "clearUpdateCache" -> {
+                // 返回释放的字节数，界面上换算成 MB 显示
+                result.success(UpdateCache.clearAll(context.applicationContext))
             }
 
             "downloadStatus" -> result.success(
@@ -120,7 +128,7 @@ object AppChannel {
     }
 
     /** versionName，例如 1.9.0；读不到时给 0.0.0，绝不抛异常 */
-    private fun versionName(context: Context): String {
+    fun currentVersionName(context: Context): String {
         return try {
             val info = context.packageManager.getPackageInfo(context.packageName, 0)
             info.versionName ?: "0.0.0"

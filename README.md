@@ -4,6 +4,8 @@
 **数据只存在手机里，不上传、不需要账号。**
 （联网只有两处，都是可选：① 检查更新 / 应用内更新——读版本号、下载 APK；② 云盘备份——需你主动填 WebDAV 服务器并点上传，备份是 AES-256 加密后传到你自己的网盘。不开则完全离线。）
 
+![薪迹数据流向图](docs/flow.svg)
+
 ---
 
 ## 一、已实现的功能
@@ -27,8 +29,8 @@
 | 备份恢复 | 加密备份 `.xbk`（AES-256）/ 明文 `.zip`（含 CSV），一键恢复；偏好设置随备份一起还原 |
 | 云盘备份 | 可选功能，WebDAV（坚果云 / 群晖 / Nextcloud）上传/下载加密备份；密码可看明文、本机记住；**每月指定日自动备份**，默认关闭 |
 | 应用锁 | 指纹/面容优先 + PIN 兜底 + 提示语找回；切后台重新锁定时长可配（立即～5 分钟） |
-| 隐私保护 | 切后台盖住整屏（最近任务看不到工资内容）+ 首页顶栏一键金额打码（¥****） |
-| 在线更新 | 应用内后台下载、断点续传，常驻进度条（百分比/速度/剩余时间），不打断使用 |
+| 隐私保护 | 切后台盖住整屏（最近任务看不到工资内容，200ms 延迟避免误盖），样式跟随深浅主题 + 首页顶栏一键金额打码（¥****） |
+| 在线更新 | 应用内后台下载、断点续传，常驻进度条（百分比/速度/剩余时间），不打断使用；**gh-proxy.com / ghfast.top / ghproxy.net / 官方直链四线路**，可手动切换、失败自动换线；**SHA-256 校验**防截断包；后台点通知可直接拉起安装；安装包自动清理，不留旧版本 |
 | 主题外观 | 5 套配色 + 浅色/深色/跟随系统，涨红跌绿保持不变 |
 
 ---
@@ -63,7 +65,8 @@ xinji/
 ├── lib/
 │   ├── main.dart                     入口、全局 Provider、后台超时上锁
 │   ├── core/
-│   │   └── money.dart                ★ 金额解析与格式化（全部按「分」存整数）
+│   │   ├── money.dart                ★ 金额解析与格式化（全部按「分」存整数）
+│   │   └── app_update.dart           检查更新、多线路下载编排、线路偏好
 │   ├── data/
 │   │   ├── models.dart               数据模型（PayRecord / PayItem / PayImage / ItemTemplate）
 │   │   ├── db.dart                   SQLite 建表、迁移、预置模板
@@ -76,12 +79,14 @@ xinji/
 │   │   ├── merge_engine.dart         ★★ 多图重叠合并（本项目最核心算法）
 │   │   └── ocr_service.dart          OCR 门面 + 长截图压缩
 │   ├── stats/
-│   │   └── salary_stats.dart         月/年聚合、对比计算
+│   │   ├── salary_stats.dart         月/年聚合、跨年期间、对比计算
+│   │   └── range_stats.dart          任意范围汇总（带懒缓存）
 │   ├── security/
 │   │   └── lock_service.dart         PIN 哈希、生物识别、提示语找回
 │   ├── backup/
 │   │   ├── backup_service.dart       ZIP / AES 加密备份与恢复
-│   │   └── cloud_backup.dart         WebDAV 云盘备份（可选，默认关闭）
+│   │   ├── cloud_backup.dart         WebDAV 云盘备份（可选，默认关闭）
+│   │   └── cloud_auto_backup.dart    每月指定日自动备份（打开 App 时补做）
 │   ├── state/
 │   │   └── app_state.dart            全局状态、OCR 流程编排
 │   └── ui/
@@ -93,13 +98,17 @@ xinji/
 │       ├── yearly_page.dart          年度总览
 │       ├── compare_page.dart         两月对比
 │       ├── year_picker.dart          年份选择弹窗（首页 / 统计共用）
+│       ├── update_dialog.dart        发现新版本弹窗（含下载线路选择）
 │       ├── settings_page.dart        设置 + 项目模板管理
 │       ├── lock_page.dart            解锁 / 设置锁 / 找回 PIN
 │       └── widgets/image_viewer.dart 原图查看
 ├── android/                          Android 工程配置（云构建用）
 │   ├── app/build.gradle.kts          minSdk 29、包名、签名、关混淆
-│   ├── app/src/main/AndroidManifest.xml  应用名、生物识别权限、无网络权限
+│   ├── app/src/main/AndroidManifest.xml  应用名、权限、透明安装入口
 │   ├── app/src/main/kotlin/.../MainActivity.kt  FlutterFragmentActivity（指纹必需）
+│   ├── app/src/main/kotlin/.../UpdateDownloadService.kt  前台下载 + 多线路 + SHA-256 校验
+│   ├── app/src/main/kotlin/.../UpdateCache.kt  安装包/残留清理
+│   ├── app/src/main/kotlin/.../InstallLauncherActivity.kt  后台点通知拉起安装
 │   ├── app/keystore/xinji.jks        签名文件（改动会导致不能覆盖安装）
 │   └── key.properties                签名密码
 ├── .github/workflows/build-apk.yml   ★ GitHub Actions 自动打包
@@ -173,6 +182,30 @@ xinji/
 奖金塞进月度柱状图会让某个月突然高十倍，图就没法看了。
 所以：柱状图只画月度工资，奖金单独一块；月度对比也只比月度工资。
 
+### 6. 更新下载：多线路 + 校验 + 自动清理
+GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
+
+- **四线路**：默认走 `gh-proxy.com`，失败依次换 `ghfast.top` → `ghproxy.net` → 官方直链。
+  在更新弹窗里可以手动选，选过的会记住；官方直链永远兜底。
+  注意第三方代理能看到你的下载请求 IP，介意就选官方直链。
+- **SHA-256 校验**：CI 发版时生成 `xinji.apk.sha256` 随包上传，App 下载完比对哈希，
+  不匹配就换线路重下 —— 防止代理返回错误页、CDN 截断的半截包被当成 APK 装上去。
+- **通知栏安装**：下载完点通知就能装。原来用 `PendingIntent.getService` + 后台
+  `startActivity`，Android 10+ 会拦掉后台启动，表现为"点了没反应"。现在改成拉起一个
+  透明的 `InstallLauncherActivity`，由前台 Activity 调系统安装器。
+- **自动清理**：新版启动后只保留当前版本的 APK，其它版本的 `.apk` 和 `.part` 全删；
+  没下完的 `.part` 留一天还能续传，过期清掉。设置页也有「清理更新缓存」手动一键清。
+
+### 7. 统计性能：一次遍历 + 懒缓存
+数据量小时无所谓，但统计页一次 build 会反复读同一批聚合值：
+
+- `StatsBuilder.buildYear` 原来每月 `where` 全表扫一遍（12 次），首页年份弹窗又按年调用
+  N 次；现在一次遍历按月份分桶，`O(记录数 + 12)`。
+- `RangeSummary` 的 `byYear` / `byMonthOfYear` / `incomeByItem` 等 getter 加了懒缓存，
+  同一份数据在一个页面里只算一次。
+- `normalizeName` / 模板匹配的高频正则提成静态常量，归一化结果带上限缓存 —— 识别时按
+  「行 × 模板 × 别名」放大的调用，省下的开销很可观。
+
 ---
 
 ## 四、已知限制（说清楚，别踩坑）
@@ -184,9 +217,10 @@ xinji/
 3. **卸载 App 会连数据一起删**。本地存储的必然代价，请定期导出备份。
 4. **忘记 PIN 只能靠提示语**。提示语也忘了，就只剩「清除数据重装」。
 5. **APK 体积约 91MB**。PP-OCRv6 模型（25MB）、单套 arm64 的 ONNX Runtime + OpenCV native 库都在包里，这是完全离线的代价。只支持 64 位手机（现在的新机都是）。
-6. **检查更新走应用内下载**。仓库已公开，联网只用于读版本号和下载 APK，不带走任何工资数据。
-7. **v2.0.0 起 minSdk 升到 29**。Android 10 及以下装不了；从旧版覆盖安装如失败，先导出备份再卸载重装。
-8. **定时云盘备份不是真后台任务**。到了你设定的日期后，需要打开一次 App 才会补做（后台常驻要额外引依赖、耗电、还容易被系统杀）。当月已经成功备份过就不会重复上传。
+6. **检查更新走应用内下载**。仓库已公开，联网只用于读版本号和下载 APK，不带走任何工资数据。默认走 gh-proxy 加速线路（第三方能看到下载 IP，介意就在更新弹窗切官方直链）；下载完做 SHA-256 校验，确保拿到的是完整安装包。
+7. **防缩略图能力有限**。为避免下拉通知栏、侧滑工具箱误触发，遮罩改到 `paused` 后才盖（延迟 200ms），不再抢在 `inactive`。代价是极快的切后台可能拍到内容；要 100% 防截屏得用原生 `FLAG_SECURE`，但那样 App 内也截不了图。
+8. **v2.0.0 起 minSdk 升到 29**。Android 10 及以下装不了；从旧版覆盖安装如失败，先导出备份再卸载重装。
+9. **定时云盘备份不是真后台任务**。到了你设定的日期后，需要打开一次 App 才会补做（后台常驻要额外引依赖、耗电、还容易被系统杀）。当月已经成功备份过就不会重复上传。
 
 ---
 
@@ -195,5 +229,4 @@ xinji/
 - 导出 Excel / PDF（当前备份里的 CSV 已能直接喂给 Excel）
 - 分类占比、绩效系数走势、税负率曲线
 - 发薪日提醒
-- 多雇主档案（跳槽后新旧工资条并存）
 - iOS 适配（代码结构已按跨端写，主要补 iOS 权限声明和打包配置）

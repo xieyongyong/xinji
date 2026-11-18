@@ -69,10 +69,14 @@ class _StatsPageState extends State<StatsPage> {
         : base.where((r) => r.periodYear == _year).toList();
     final sum = RangeSummary(inScope);
 
-    // 「雇主」维度要看全部雇主的记录，不能只用当前雇主那一份
+    // 「雇主」维度要看全部雇主的记录，不能只用当前雇主那一份；
+    // 数据在 build 里算好一次传下去，页面内各处复用同一个 RangeSummary（内部有懒缓存）。
     final crossEmployer = _year == null
         ? state.records
         : state.records.where((r) => r.periodYear == _year).toList();
+    final crossSum = _dim == StatsDimension.employer
+        ? RangeSummary(crossEmployer)
+        : sum;
 
     // 年份弹窗里每年带实发数，顺便替代原来那排「全部 / 2026 年 / 2025 年」
     // 横滑 chips —— 年份一多就得滚，还不知道哪年有数据。
@@ -101,7 +105,7 @@ class _StatsPageState extends State<StatsPage> {
           const SizedBox(height: 14),
           _dimensionSwitch(),
           const SizedBox(height: 12),
-          ..._content(state, sum, crossEmployer),
+          ..._content(state, sum, crossSum),
         ],
       ),
     );
@@ -297,7 +301,7 @@ class _StatsPageState extends State<StatsPage> {
   }
 
   List<Widget> _content(
-      AppState state, RangeSummary sum, List<PayRecord> crossEmployer) {
+      AppState state, RangeSummary sum, RangeSummary crossSum) {
     if (sum.isEmpty && _dim != StatsDimension.employer) {
       return [
         Padding(
@@ -333,7 +337,7 @@ class _StatsPageState extends State<StatsPage> {
           ],
         ];
       case StatsDimension.employer:
-        return [_employerCard(state, crossEmployer)];
+        return [_employerCard(state, crossSum)];
     }
   }
 
@@ -817,8 +821,7 @@ class _StatsPageState extends State<StatsPage> {
 
   // ------------------------------------------------------------ 雇主
 
-  Widget _employerCard(AppState state, List<PayRecord> crossEmployer) {
-    final sum = RangeSummary(crossEmployer);
+  Widget _employerCard(AppState state, RangeSummary sum) {
     final rows = sum.netByEmployer;
     if (rows.isEmpty) {
       return Container(

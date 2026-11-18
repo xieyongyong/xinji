@@ -63,24 +63,35 @@ class RangeSummary {
 
   RangeSummary(this.records);
 
+  // 这些 getter 在统计页一次 build 里会被调用多次（总计、各维度卡片都要读）。
+  // records 在生命周期内不变，算一次缓存起来，避免反复全量 fold。
+  int? _totalNet, _totalGross, _totalDeduction;
+  int? _monthlyNet, _extraNet, _monthCount;
+  List<PayRecord>? _monthly, _extras;
+  String? _periodLabel;
+  List<MapEntry<String, int>>? _incomeByItem, _deductionByItem, _extraByLabel;
+  List<YearAgg>? _byYear;
+  List<MonthAgg>? _byMonthOfYear;
+  List<MapEntry<int, int>>? _netByEmployer;
+
   bool get isEmpty => records.isEmpty;
 
   int _sum(int Function(PayRecord) f) => records.fold(0, (s, r) => s + f(r));
 
-  int get totalNet => _sum((r) => r.netCents);
-  int get totalGross => _sum((r) => r.grossCents);
-  int get totalDeduction => _sum((r) => r.deductionCents);
+  int get totalNet => _totalNet ??= _sum((r) => r.netCents);
+  int get totalGross => _totalGross ??= _sum((r) => r.grossCents);
+  int get totalDeduction => _totalDeduction ??= _sum((r) => r.deductionCents);
 
   List<PayRecord> get _monthly =>
-      records.where((r) => r.recordType == kTypeMonthly).toList();
+      _monthly ??= records.where((r) => r.recordType == kTypeMonthly).toList();
   List<PayRecord> get _extras =>
-      records.where((r) => r.recordType == kTypeExtra).toList();
+      _extras ??= records.where((r) => r.recordType == kTypeExtra).toList();
 
-  int get monthlyNet => _monthly.fold(0, (s, r) => s + r.netCents);
-  int get extraNet => _extras.fold(0, (s, r) => s + r.netCents);
+  int get monthlyNet => _monthlyNet ??= _monthly.fold(0, (s, r) => s + r.netCents);
+  int get extraNet => _extraNet ??= _extras.fold(0, (s, r) => s + r.netCents);
 
   /// 有记录的月份数（同一个月多笔只算一个月）
-  int get monthCount =>
+  int get monthCount => _monthCount ??=
       _monthly.map((r) => r.periodYear * 100 + r.periodMonth).toSet().length;
 
   int get avgNet => monthCount == 0 ? 0 : (monthlyNet / monthCount).round();
@@ -88,7 +99,7 @@ class RangeSummary {
   int get recordCount => records.length;
 
   /// 最早 / 最晚一笔的"年-月"标签，用来告诉用户这个总计覆盖到哪
-  String get periodLabel {
+  String get periodLabel => _periodLabel ??= () {
     if (records.isEmpty) return '';
     final keys = records.map((r) => r.periodYear * 100 + r.periodMonth).toList()
       ..sort();
@@ -97,13 +108,15 @@ class RangeSummary {
     final s = '${a ~/ 100}.${(a % 100).toString().padLeft(2, '0')}';
     final e = '${b ~/ 100}.${(b % 100).toString().padLeft(2, '0')}';
     return s == e ? s : '$s – $e';
-  }
+  }();
 
   /// 每个项目一共拿了多少（收入）
-  List<MapEntry<String, int>> get incomeByItem => _itemMap(kCategoryIncome);
+  List<MapEntry<String, int>> get incomeByItem =>
+      _incomeByItem ??= _itemMap(kCategoryIncome);
 
   /// 每个项目一共扣了多少
-  List<MapEntry<String, int>> get deductionByItem => _itemMap(kCategoryDeduction);
+  List<MapEntry<String, int>> get deductionByItem =>
+      _deductionByItem ??= _itemMap(kCategoryDeduction);
 
   List<MapEntry<String, int>> _itemMap(String category) {
     final map = <String, int>{};
@@ -120,7 +133,7 @@ class RangeSummary {
   }
 
   /// 按年份汇总（倒序）
-  List<YearAgg> get byYear {
+  List<YearAgg> get byYear => _byYear ??= () {
     final groups = <int, List<PayRecord>>{};
     for (final r in records) {
       groups.putIfAbsent(r.periodYear, () => []).add(r);
@@ -142,10 +155,10 @@ class RangeSummary {
         months: monthly.map((r) => r.periodMonth).toSet().length,
       );
     }).toList();
-  }
+  }();
 
   /// 1~12 月跨年合并：看"哪个月通常拿得多"，比单年曲线更能看出规律
-  List<MonthAgg> get byMonthOfYear {
+  List<MonthAgg> get byMonthOfYear => _byMonthOfYear ??= () {
     final nets = List<int>.filled(13, 0);
     final gross = List<int>.filled(13, 0);
     final ded = List<int>.filled(13, 0);
@@ -170,27 +183,25 @@ class RangeSummary {
           deduction: ded[m],
         ),
     ];
-  }
+  }();
 
   /// 奖金按名目汇总
-  List<MapEntry<String, int>> get extraByLabel {
+  List<MapEntry<String, int>> get extraByLabel => _extraByLabel ??= () {
     final map = <String, int>{};
     for (final r in _extras) {
       final label = (r.recordLabel ?? '其他收入').trim();
       map[label] = (map[label] ?? 0) + r.netCents;
     }
-    final list = map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    return list;
-  }
+    return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  }();
 
   /// 按雇主汇总（跨雇主的总计才用得上）
-  List<MapEntry<int, int>> get netByEmployer {
+  List<MapEntry<int, int>> get netByEmployer => _netByEmployer ??= () {
     final map = <int, int>{};
     for (final r in records) {
       final id = r.employerId ?? -1;
       map[id] = (map[id] ?? 0) + r.netCents;
     }
-    final list = map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
-    return list;
-  }
+    return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  }();
 }

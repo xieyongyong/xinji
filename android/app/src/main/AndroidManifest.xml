@@ -77,6 +77,16 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!--
+            下载完成通知的点击入口：透明 Activity，点通知时拉起它，
+            再由前台 Activity 调系统安装器。绕开「后台不能启动 Service /
+            后台不能启动 Activity」两道限制。不对外导出。
+        -->
+        <activity
+            android:name=".InstallLauncherActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <!-- 把私有目录里的 APK 临时授权给系统安装器读一下，不必放开整个文件系统 -->
         <provider
             android:name="androidx.core.content.FileProvider"

@@ -32,6 +32,16 @@ class UpdateChecker {
 
   static const String _kLastCheck = 'update_last_check';
   static const String _kSkipVersion = 'update_skip_version';
+  static const String _kLine = 'update_preferred_line';
+
+  /// 下载线路：默认走 gh-proxy.com 加速，失败依次退到其它线路、最后是官方直链。
+  /// 用户可以在更新弹窗里手动改，改过的选择会记住。
+  static const List<DownloadLine> lines = [
+    DownloadLine('gh-proxy.com', 'gh-proxy.com', prefix: 'https://gh-proxy.com'),
+    DownloadLine('ghfast.top', 'ghfast.top', prefix: 'https://ghfast.top'),
+    DownloadLine('ghproxy.net', 'ghproxy.net', prefix: 'https://ghproxy.net'),
+    DownloadLine('official', '官方直链'),
+  ];
 
   static const MethodChannel _channel = MethodChannel(_channelName);
   static const EventChannel _updateEvents = EventChannel('xinji/update_progress');
@@ -45,11 +55,59 @@ class UpdateChecker {
   }
 
   /// 启动后台下载：立刻返回，下载在原生前台服务里跑，用户可以继续操作 App。
-  static Future<void> startDownload(ReleaseInfo release) async {
+  ///
+  /// [preferredLine] 是用户选的线路 id；它排第一，其余线路顺延，官方直链永远兜底。
+  /// 原生侧按这个顺序逐条尝试，失败自动换下一条。
+  static Future<void> startDownload(
+    ReleaseInfo release, {
+    String? preferredLine,
+  }) async {
+    final chosen = preferredLine ?? await preferredLineId();
+    final ordered = _orderedUrls(release.apkUrl, chosen);
     await _channel.invokeMethod<bool>('download', {
-      'url': release.apkUrl,
+      'urls': ordered,
       'version': release.version,
+      'sha256': release.sha256,
     });
+  }
+
+  /// 把用户选的线路排到最前，其余线路按默认顺序补上，官方直链始终作为最后兜底。
+  /// 去重避免用户选了 gh-proxy 时它出现两次。
+  static List<String> _orderedUrls(String official, String chosen) {
+    if (official.isEmpty) return const [];
+    final byId = {for (final l in lines) l.id: l};
+    final ids = <String>[if (byId.containsKey(chosen)) chosen];
+    for (final l in lines) {
+      if (!ids.contains(l.id)) ids.add(l.id);
+    }
+    final out = <String>[];
+    for (final id in ids) {
+      final url = byId[id]!.urlFor(official);
+      if (!out.contains(url)) out.add(url);
+    }
+    // 兜底：官方直链始终在最后（用户传了陌生 id 时上面的 chosen 分支会落空）
+    if (!out.contains(official)) out.add(official);
+    return out;
+  }
+
+  /// 记住用户手动选的下载线路。传 null / 空串恢复默认。
+  static Future<void> setPreferredLine(String? id) async {
+    final sp = await SharedPreferences.getInstance();
+    if (id == null || id.isEmpty) {
+      await sp.remove(_kLine);
+    } else {
+      await sp.setString(_kLine, id);
+    }
+  }
+
+  /// 当前线路 id，默认 gh-proxy.com。
+  static Future<String> preferredLineId() async {
+    final sp = await SharedPreferences.getInstance();
+    final id = sp.getString(_kLine) ?? '';
+    if (id.isEmpty) return lines.first.id;
+    // 老版本存了个已下线的线路名时，回退默认
+    if (!lines.any((e) => e.id == id)) return lines.first.id;
+    return id;
   }
 
   static Future<void> cancelDownload() =>
@@ -57,6 +115,16 @@ class UpdateChecker {
 
   static Future<void> installDownloaded() =>
       _channel.invokeMethod<bool>('installApk');
+
+  /// 清理更新目录里所有安装包与残留，返回释放的字节数。
+  static Future<int> clearUpdateCache() async {
+    try {
+      final freed = await _channel.invokeMethod<int>('clearUpdateCache') ?? 0;
+      return freed;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   static Future<UpdateState> downloadStatus() async {
     try {
@@ -117,7 +185,9 @@ class UpdateChecker {
         throw UpdateException('版本信息格式不对');
       }
 
-      ReleaseInfo? best;
+      // 先选出版本号最高的那个 Release，再去读它的校验文件
+      Map? bestRaw;
+      String? bestVersion;
       for (final raw in decoded) {
         if (raw is! Map) continue;
         if (raw['draft'] == true) continue;
@@ -127,19 +197,43 @@ class UpdateChecker {
         final m = RegExp(r'^v(\d+)\.(\d+)\.(\d+)$').firstMatch(tag);
         if (m == null) continue;
         final version = '${m.group(1)}.${m.group(2)}.${m.group(3)}';
-        final candidate = ReleaseInfo(
-          version: version,
-          tag: tag,
-          notes: (raw['body'] ?? '').toString().trim(),
-          pageUrl: (raw['html_url'] ?? 'https://github.com/$repo/releases').toString(),
-          apkUrl: _apkUrlOf(raw, version),
-          publishedAt: (raw['published_at'] ?? '').toString(),
-        );
-        if (best == null || compareVersions(version, best.version) > 0) {
-          best = candidate;
+        if (bestVersion == null || compareVersions(version, bestVersion) > 0) {
+          bestVersion = version;
+          bestRaw = raw;
         }
       }
-      return best;
+      if (bestRaw == null || bestVersion == null) return null;
+
+      // 校验文件是可选项：CI 从 2.6 起才生成，老 Release 没有也能正常更新。
+      // 读它失败绝不能让"检查更新"整体失败，所以单独 try 掉。
+      String? sha;
+      final shaUrl = _sha256UrlOf(bestRaw);
+      if (shaUrl != null) {
+        try {
+          final shaReq = await client.getUrl(Uri.parse(shaUrl)).timeout(const Duration(seconds: 8));
+          shaReq.headers.set('User-Agent', 'xinji-android-updater');
+          final shaResp = await shaReq.close().timeout(const Duration(seconds: 10));
+          if (shaResp.statusCode == 200) {
+            final text = (await shaResp.transform(utf8.decoder).join()).trim();
+            // 文件内容形如 "abc123...  xinji.apk"，只取第一段；必须是 64 位十六进制
+            final hash = text.split(RegExp(r'\s+')).first;
+            if (RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(hash)) sha = hash.toLowerCase();
+          }
+        } catch (_) {
+          // 读不到就算了：没有校验的下载仍然可用（原生那边会跳过校验）
+        }
+      }
+
+      final tag = (bestRaw['tag_name'] ?? '').toString().trim();
+      return ReleaseInfo(
+        version: bestVersion,
+        tag: tag,
+        notes: (bestRaw['body'] ?? '').toString().trim(),
+        pageUrl: (bestRaw['html_url'] ?? 'https://github.com/$repo/releases').toString(),
+        apkUrl: _apkUrlOf(bestRaw, bestVersion),
+        sha256: sha,
+        publishedAt: (bestRaw['published_at'] ?? '').toString(),
+      );
     } on UpdateException {
       rethrow;
     } on SocketException {
@@ -167,6 +261,22 @@ class UpdateChecker {
       }
     }
     return 'https://github.com/$repo/releases/download/v$version/xinji.apk';
+  }
+
+  /// Release 里 `xinji.apk.sha256` 的下载 URL（CI 发版时生成）。
+  /// 返回 null 表示这个版本没有校验文件（老版本），跳过校验即可。
+  static String? _sha256UrlOf(Map raw) {
+    final assets = raw['assets'];
+    if (assets is! List) return null;
+    for (final a in assets) {
+      if (a is! Map) continue;
+      final name = (a['name'] ?? '').toString().toLowerCase();
+      // 只认我们约定的那个文件，避免误把其它资产的校验值拿来比对
+      if (name != 'xinji.apk.sha256') continue;
+      final v = (a['browser_download_url'] ?? '').toString();
+      if (v.isNotEmpty) return v;
+    }
+    return null;
   }
 
   /// 比较两个 `x.y.z` 版本号：a > b 返回正数，相等 0，小于负数
@@ -234,6 +344,19 @@ class UpdateChecker {
   }
 }
 
+/// 一条下载线路。[prefix] 为空表示官方直链（不套代理前缀）。
+class DownloadLine {
+  final String id;
+  final String label;
+  final String prefix;
+
+  const DownloadLine(this.id, this.label, {this.prefix = ''});
+
+  /// 把官方直链套上代理前缀。形如 https://gh-proxy.com/https://github.com/...
+  String urlFor(String official) =>
+      prefix.isEmpty ? official : '$prefix/$official';
+}
+
 /// 远端某个版本的信息
 class ReleaseInfo {
   final String version;
@@ -241,6 +364,9 @@ class ReleaseInfo {
   final String notes;
   final String pageUrl;
   final String apkUrl;
+
+  /// APK 的 SHA-256（64 位小写），null = 这个 Release 没有校验文件，跳过校验
+  final String? sha256;
   final String publishedAt;
 
   const ReleaseInfo({
@@ -249,6 +375,7 @@ class ReleaseInfo {
     required this.notes,
     required this.pageUrl,
     required this.apkUrl,
+    this.sha256,
     required this.publishedAt,
   });
 
@@ -370,10 +497,10 @@ class UpdateDownloadController extends ChangeNotifier {
     });
   }
 
-  Future<void> start(ReleaseInfo release) async {
+  Future<void> start(ReleaseInfo release, {String? preferredLine}) async {
     attach();
     _hidden = false;
-    await UpdateChecker.startDownload(release);
+    await UpdateChecker.startDownload(release, preferredLine: preferredLine);
   }
 
   Future<void> cancel() => UpdateChecker.cancelDownload();

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="300" viewBox="0 0 880 300" font-family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F7F8FC"/>
+      <stop offset="1" stop-color="#ECEFF7"/>
+    </linearGradient>
+    <linearGradient id="node" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F2F4FA"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#7A86A8"/>
+    </marker>
+  </defs>
+  <rect width="880" height="300" rx="16" fill="url(#bg)"/>
+  <text x="32" y="42" font-size="19" font-weight="700" fill="#2B3350">薪迹 · 数据流向（全程本机，不上传）</text>
+  <text x="32" y="66" font-size="12.5" fill="#6B7596">截图导入 → 离线识别 → 校对归档 → 统计与对比；备份是唯一出网口（AES-256 加密传到自己的网盘）</text>
+
+  <!-- nodes -->
+  <g>
+    <rect x="32" y="104" width="140" height="92" rx="12" fill="url(#node)" stroke="#C9D0E4"/>
+    <text x="102" y="134" font-size="26" text-anchor="middle">📷</text>
+    <text x="102" y="158" font-size="14" font-weight="600" fill="#2B3350" text-anchor="middle">截图 / 拍照</text>
+    <text x="102" y="178" font-size="11" fill="#6B7596" text-anchor="middle">多图重叠合并</text>
+  </g>
+  <g>
+    <rect x="212" y="104" width="140" height="92" rx="12" fill="url(#node)" stroke="#C9D0E4"/>
+    <text x="282" y="134" font-size="26" text-anchor="middle">🔍</text>
+    <text x="282" y="158" font-size="14" font-weight="600" fill="#2B3350" text-anchor="middle">离线 OCR</text>
+    <text x="282" y="178" font-size="11" fill="#6B7596" text-anchor="middle">RapidOCR + PP-OCRv6</text>
+  </g>
+  <g>
+    <rect x="392" y="104" width="140" height="92" rx="12" fill="url(#node)" stroke="#C9D0E4"/>
+    <text x="462" y="134" font-size="26" text-anchor="middle">✍️</text>
+    <text x="462" y="158" font-size="14" font-weight="600" fill="#2B3350" text-anchor="middle">校对归档</text>
+    <text x="462" y="178" font-size="11" fill="#6B7596" text-anchor="middle">按「分」存整数</text>
+  </g>
+  <g>
+    <rect x="572" y="104" width="140" height="92" rx="12" fill="url(#node)" stroke="#C9D0E4"/>
+    <text x="642" y="134" font-size="26" text-anchor="middle">📊</text>
+    <text x="642" y="158" font-size="14" font-weight="600" fill="#2B3350" text-anchor="middle">统计总览</text>
+    <text x="642" y="178" font-size="11" fill="#6B7596" text-anchor="middle">折线 / 年 / 项目 / 雇主</text>
+  </g>
+  <g>
+    <rect x="752" y="104" width="96" height="92" rx="12" fill="url(#node)" stroke="#C9D0E4"/>
+    <text x="800" y="134" font-size="26" text-anchor="middle">⚖️</text>
+    <text x="800" y="158" font-size="14" font-weight="600" fill="#2B3350" text-anchor="middle">两月对比</text>
+    <text x="800" y="178" font-size="11" fill="#6B7596" text-anchor="middle">可跨年</text>
+  </g>
+
+  <!-- arrows -->
+  <line x1="174" y1="150" x2="208" y2="150" stroke="#7A86A8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="354" y1="150" x2="388" y2="150" stroke="#7A86A8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="534" y1="150" x2="568" y2="150" stroke="#7A86A8" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="714" y1="150" x2="748" y2="150" stroke="#7A86A8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- bottom: local storage + optional network -->
+  <rect x="392" y="232" width="220" height="42" rx="10" fill="#E8F0E4" stroke="#9BB98C"/>
+  <text x="502" y="258" font-size="13" font-weight="600" fill="#3E5D33" text-anchor="middle">💾 本机 SQLite + 原图（私有目录）</text>
+  <line x1="462" y1="198" x2="462" y2="230" stroke="#7A86A8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="642" y="232" width="206" height="42" rx="10" fill="#FFF3E0" stroke="#E0B77A"/>
+  <text x="745" y="258" font-size="12.5" font-weight="600" fill="#7A5418" text-anchor="middle">☁️ 可选：加密备份 / 在线更新</text>
+  <line x1="462" y1="253" x2="638" y2="253" stroke="#C9A06A" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arrow)"/>
+
+  <text x="32" y="260" font-size="11" fill="#8A93AD">无账号 · 无上传 · 识别全在本机</text>
+  <text x="32" y="278" font-size="11" fill="#8A93AD">工资数据永不离开这台手机</text>
+</svg>
