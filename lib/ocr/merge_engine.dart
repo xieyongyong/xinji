@@ -234,13 +234,13 @@ class MergeEngine {
       if (weakDup) {
         pendingNoOverlap.add(MergeIssue(
           MergeIssueType.noOverlap,
-          '第${i}张与第${i + 1}张的重叠部分不完整（可能从一行中间切开），'
+          '第$i张与第${i + 1}张的重叠部分不完整（可能从一行中间切开），'
               '已按顺序拼接，请重点核对交界处两行',
         ));
       } else if (perImageItems[i].isNotEmpty && prev.isNotEmpty) {
         pendingNoOverlap.add(MergeIssue(
           MergeIssueType.noOverlap,
-          '第${i}张与第${i + 1}张之间没有识别到重叠内容，'
+          '第$i张与第${i + 1}张之间没有识别到重叠内容，'
               '可能中间漏截了一段，请对照原图确认没有漏项',
         ));
       }
@@ -355,8 +355,11 @@ class MergeEngine {
     });
 
     // ---- 9. 合计校验（发现漏行/多行的最强信号）----
+    // 注：gross/net/deductionTotal 在 336~338 行已用 ??= 收敛为非空，
+    // 这里用之前算好的 xxxFromSlip 守卫「工资条是否印了合计」。
+    // 没印时??=填的是明细算出来的值，差值恒为 0，不会误报。
     var totalsVerified = false;
-    if (gross != null && (incomeSum - gross).abs() > 1) {
+    if (grossFromSlip && (incomeSum - gross).abs() > 1) {
       issues.add(MergeIssue(
         MergeIssueType.totalMismatch,
         '收入明细合计 ${formatCents(incomeSum)}，与工资条应发合计 ${formatCents(gross)} '
@@ -365,7 +368,7 @@ class MergeEngine {
     } else if (grossFromSlip) {
       totalsVerified = true;
     }
-    if (net != null && (incomeSum - deductionSum - net).abs() > 1) {
+    if (netFromSlip && (incomeSum - deductionSum - net).abs() > 1) {
       issues.add(MergeIssue(
         MergeIssueType.totalMismatch,
         '应发减代扣 = ${formatCents(incomeSum - deductionSum)}，'
@@ -374,7 +377,7 @@ class MergeEngine {
     } else if (netFromSlip) {
       totalsVerified = true;
     }
-    if (deductionTotal != null && (deductionSum - deductionTotal).abs() > 1) {
+    if (deductionFromSlip && (deductionSum - deductionTotal).abs() > 1) {
       issues.add(MergeIssue(
         MergeIssueType.totalMismatch,
         '代扣明细合计 ${formatCents(deductionSum)}，与工资条应扣合计 '

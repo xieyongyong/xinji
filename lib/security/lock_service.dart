@@ -26,6 +26,10 @@ class LockService extends ChangeNotifier {
   /// 内存里的锁状态。冷启动、以及后台超过设定时长都会置为 true
   bool locked = false;
 
+  /// 后台隐私遮罩：切后台时盖住整屏，最近任务的缩略图里看不到工资内容。
+  /// 与 [locked] 无关 —— 没开应用锁也应该能遮，否则旁人在任务列表就能看到。
+  bool masked = false;
+
   bool _enabled = false;
   String? _pinHash;
   String? _pinSalt;
@@ -166,12 +170,27 @@ class LockService extends ChangeNotifier {
   void unlock() {
     if (!locked) return;
     locked = false;
+    masked = false;
     notifyListeners();
   }
 
   void lockNow() {
     if (!_enabled) return;
     locked = true;
+    masked = false;
+    notifyListeners();
+  }
+
+  /// 进后台前调用：先盖一帧遮罩，系统再拍缩略图。
+  void mask() {
+    if (masked) return;
+    masked = true;
+    notifyListeners();
+  }
+
+  void unmask() {
+    if (!masked) return;
+    masked = false;
     notifyListeners();
   }
 
