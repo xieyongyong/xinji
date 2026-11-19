@@ -234,13 +234,20 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
    - **兜底层（原生）**：
      - Android 12 及以下：`onPause` 给窗口 `addFlags(FLAG_SECURE)`、`onResume` `clearFlags`。
        只在后台加，前台截屏、录屏、投屏正常。
-     - Android 13+：`setRecentsScreenshotEnabled(true)` **明确允许**系统生成快照，
-       并把最近任务卡片设成深色底 + 应用图标 + 「薪迹」（`TaskDescription`）。
-       这里必须是 `true`：设成 `false` 会让系统干脆不拍，最近任务只剩一张空白白卡，
-       模糊画面永远不可能出现。13+ 也不再叠加 `FLAG_SECURE`，避免和这个旋钮打架。
+     - Android 13+：`setRecentsScreenshotEnabled` 做成**动态闸门**，不是死值。
+       平时（`onResume` / 开关变更）置 `false` = 禁止系统拍快照，最坏结果只是白卡；
+       等遮罩那一帧真的 raster 完成（Dart 侧 `endOfFrame`，上限 200ms）才通过
+       `maskVisible` 通道置 `true`，这时系统拍到的就是模糊画面。
+       系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
+       所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，**绝不会拍到明文**。
+       注意 `onPause` 里不能重置这个标记 —— 那会把 Dart 刚打开的许可立刻关掉，退化成永远白卡。
+       另外用 `TaskDescription` 把卡片设成深色底 + 应用图标 + 「薪迹」，
+       真走白卡那条路时也不是一张刺眼的白板。13+ 不叠加 `FLAG_SECURE`，避免和这个旋钮打架。
 
    应用图标的 PNG 由原生 `appIcon` 通道提供，启动时 `preloadAppIcon()` 预取缓存 ——
    遮罩在切后台瞬间绘制，那时不能现读 `PackageManager`。
+   栅格化时必须给固定画布（128dp）：自适应图标（Android 8+ 默认）的
+   `intrinsicWidth/Height` 是 `-1`，照它建 Bitmap 只有 1×1 像素，遮罩上等于没有图标。
 
    说明：曾系统性试过四种原生遮罩（临时 `addView` / 常驻 View 切 alpha /
    `SurfaceView` + `lockCanvas` 同步提交 / `SurfaceControl` 事务切 layer alpha），

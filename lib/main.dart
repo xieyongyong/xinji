@@ -189,9 +189,38 @@ class _ThemedApp extends StatelessWidget {
 ///
 /// 目的：系统「最近任务」里拍到的缩略图是这一屏，而不是工资明细。
 /// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
-/// 原生 `FLAG_SECURE` 另外做系统级兜底，两者互补。
-class _PrivacyMask extends StatelessWidget {
+///
+/// 还有一个不显眼但很关键的职责：**给原生放行**。
+/// Android 13+ 平时把最近任务快照关着（默认白卡），等这里确认「遮罩帧真的 raster 完成」
+/// 之后才允许系统拍照。所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+class _PrivacyMask extends StatefulWidget {
   const _PrivacyMask();
+
+  @override
+  State<_PrivacyMask> createState() => _PrivacyMaskState();
+}
+
+class _PrivacyMaskState extends State<_PrivacyMask> {
+  @override
+  void initState() {
+    super.initState();
+    _allowRecentsScreenshot();
+  }
+
+  /// 等这一帧真正走完 raster，再允许系统拍快照。
+  ///
+  /// 200ms 是硬上限：系统抓图窗口就那么点，超时说明这一帧没赶上，
+  /// 此时**不能**放行 —— 保持「禁止拍」，系统会给白卡。
+  /// 宁可白卡也不能拍到明文，这是这套机制的唯一底线。
+  Future<void> _allowRecentsScreenshot() async {
+    try {
+      await WidgetsBinding.instance.endOfFrame.timeout(const Duration(milliseconds: 200));
+    } catch (_) {
+      return; // 超时：不放行
+    }
+    if (!mounted) return; // 遮罩已经被撤掉（比如瞬间又回到前台），没必要放行
+    await PrivacyChannel.markMaskVisible();
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -39,4 +39,15 @@ class PrivacyChannel {
       if (bytes != null && bytes.isNotEmpty) appIconBytes = bytes;
     } catch (_) {}
   }
+
+  /// 告诉原生「遮罩那一帧已经画完了，可以允许系统拍快照」。
+  ///
+  /// 只在 Android 13+ 有意义：那边平时把最近任务快照关着（默认给白卡），
+  /// 等遮罩真的进了 Surface 才打开许可，于是拍到的就是模糊画面而不是明文。
+  /// 如果这一帧没赶上（超时就不调用），系统保持关闭 → 白卡，绝不泄露内容。
+  static Future<void> markMaskVisible() async {
+    try {
+      await _channel.invokeMethod<bool>('maskVisible');
+    } catch (_) {}
+  }
 }

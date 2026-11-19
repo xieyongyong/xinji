@@ -40,33 +40,42 @@ class MainActivity : FlutterFragmentActivity() {
     private var foreground = true
 
     /**
-     * 后台隐私的**系统级兜底**。和 v2.7.0 保持一致，13+ 做了一处针对性优化。
+     * **Android 13+ 的拍照许可闸门。**
+     *
+     * `setRecentsScreenshotEnabled` 只有两个值，各有各的问题：
+     * - `false`：系统一定不拍 → 最近任务永远是白卡，模糊画面永远看不到；
+     * - `true` ：系统一定拍 → 遮罩那一帧没赶上就是**明文**，没有任何兜底。
+     *
+     * 所以这里不选死值，而是做成「默认禁止 + 画完再放行」：
+     *   onResume / 开关变更 → 置 false（安全默认，最坏结果只是白卡）
+     *   遮罩帧真正 raster 完成 → Dart 通过 `maskVisible` 通道置 true（才允许拍）
+     *   onPause → **不动它**（动了就会把 Dart 刚打开的许可立刻关掉，等于永远白卡）
+     *
+     * 系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
+     * 所以「画完再放行」这个顺序是成立的。
+     */
+    @Volatile
+    private var recentsScreenshotAllowed = false
+
+    /**
+     * 后台隐私的**系统级兜底**，按版本分两条路。
      *
      * ## Android 12 及以下：`FLAG_SECURE`
-     * 窗口属性。`onPause` 加、`onResume` 清，系统抓图时读到 flag 就出黑帧/
-     * 不拍，不依赖 App 渲染任何一帧 —— 上滑手势、返回键、Home、锁屏都拦得住。
+     * 窗口属性。`onPause` 加、`onResume` 清，系统抓图时读到 flag 出黑帧。
      * 只在后台加，所以前台截屏、录屏、投屏正常。
      *
-     * ## Android 13+：`setRecentsScreenshotEnabled(true)` + 不加 FLAG_SECURE
-     * 这是本次唯一的优化点，也是之前几版踩坑的地方：
+     * ## Android 13+：`setRecentsScreenshotEnabled`，动态开关
+     * 见 [recentsScreenshotAllowed]：默认禁止拍（白卡），遮罩帧画完才放行（拍到模糊）。
+     * 注意这里**不能**在 `onPause` 里把它重置成 false —— 那会把 Dart 刚打开的许可
+     * 立刻关掉，退化成「永远白卡」。重置只发生在 `onResume`。
      *
-     * 之前这里写的是 `setRecentsScreenshotEnabled(false)`（禁止拍快照），
-     * 结果是系统干脆不拍，最近任务只剩一张**空白白卡** —— 模糊画面永远不可能出现。
-     * 而我们要的是「拍到模糊遮罩」，不是「拍不到给张白卡」，所以这里必须是 **true**：
-     * 明确告诉系统「可以拍」，抵消部分 ROM 对敏感应用默认不拍快照的行为。
-     *
-     * 为什么 13+ 不再加 `FLAG_SECURE`：它是「禁止被截取」的语义，一旦加上，
-     * 快照同样会被拦掉（又变回白卡）。13+ 有 `setRecentsScreenshotEnabled`
-     * 这个更精确的旋钮，就没必要再用这个粗粒度的 flag 去和它打架。
-     *
-     * 兜底还有一层：[applyTaskDescription] 把最近任务卡片设成品牌色 + 应用图标 +
-     * 「薪迹」，万一某台机器仍然不拍快照，显示出来也是一张正常卡片，不是刺眼的白板。
+     * 兜底还有一层：[applyTaskDescription] 把最近任务卡片设成品牌色 + 应用图标，
+     * 万一某台机器仍然不拍快照，显示出来是一张正常卡片，不是刺眼的白板。
      */
     private fun applyPrivacyFlag() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // 允许系统在 Activity 被 stop 时生成快照 —— 这样 Flutter 那层
-            // 毛玻璃遮罩才有机会被拍进去。
-            setRecentsScreenshotEnabled(true)
+            // 13+：这里故意什么都不做。拍照许可由 onResume / 通道单独管理，
+            // 因为 onPause 时刻它可能刚被 Dart 打开（遮罩帧已画完），重置就是自毁。
             return
         }
         // 12 及以下：v2.7.0 的老办法，只在后台加
@@ -76,6 +85,19 @@ class MainActivity : FlutterFragmentActivity() {
             window.addFlags(flag)
         } else {
             window.clearFlags(flag)
+        }
+    }
+
+    /** 13+ 的拍照许可开关。低版本没有这个 API，静默跳过。 */
+    private fun setRecentsScreenshotAllowed(allowed: Boolean) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        // 这里不能因为「值没变」就跳过：字段初始是 false，而系统的默认是 **允许拍**，
+        // 启动时必须真的下发一次 false，否则头一次离开就是明文。
+        recentsScreenshotAllowed = allowed
+        try {
+            setRecentsScreenshotEnabled(allowed)
+        } catch (_: Throwable) {
+            // 个别 ROM 限制该 API，失败就退回「不拍」（安全侧）
         }
     }
 
@@ -104,12 +126,17 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onResume() {
         foreground = true
+        // 每一轮回到前台都从「禁止拍」重新开始。
+        // 这样下一次离开时，如果遮罩帧没赶上，系统给的是白卡而不是明文。
+        setRecentsScreenshotAllowed(!privacyEnabled)
         applyPrivacyFlag()
         super.onResume()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 启动即从「禁止拍」开始，等遮罩真的画出来再由 Dart 放行
+        setRecentsScreenshotAllowed(!privacyEnabled)
         applyTaskDescription()
         // 主进程启动时记一笔「上次是谁怎么死的」，设置页的诊断日志会读到它。
         // native 崩溃抓不到 Dart 异常，只有系统这份记录能说清原因。
@@ -133,11 +160,15 @@ class MainActivity : FlutterFragmentActivity() {
             // 后续 recycle 会连带把系统缓存里的图标回收掉。
             return d.bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
-        val w = d.intrinsicWidth.coerceAtLeast(1)
-        val h = d.intrinsicHeight.coerceAtLeast(1)
-        val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        // 自适应图标（Android 8+ 的默认形式，本项目就是）的 intrinsicWidth /
+        // intrinsicHeight 返回的是 **-1**，不是实际像素尺寸。
+        // 旧代码 `intrinsicWidth.coerceAtLeast(1)` 会得到 1×1 的位图 ——
+        // 传到 Dart 再放大到 62dp，就是一块空白，表现就是「遮罩上的图标没了」。
+        // 所以这里必须按屏幕密度给一个固定画布。
+        val size = (resources.displayMetrics.density * 128).toInt().coerceAtLeast(96)
+        val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(b)
-        d.setBounds(0, 0, w, h)
+        d.setBounds(0, 0, size, size)
         d.draw(c)
         return b
     }
@@ -158,9 +189,16 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 "setEnabled" -> {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
-                    // 开关改动要立刻反映到窗口标记上（此调用永远发生在前台）
+                    // 开关变了就从「禁止拍」重新开始（关掉开关则直接允许拍）
+                    setRecentsScreenshotAllowed(!privacyEnabled)
                     applyPrivacyFlag()
                     result.success(true)
+                }
+                // Dart 侧确认「遮罩那一帧已经 raster 完成」——此刻才允许系统拍快照。
+                // 迟到的调用（Activity 已经 stopped）改标记已无效，无害。
+                "maskVisible" -> {
+                    if (privacyEnabled) setRecentsScreenshotAllowed(true)
+                    result.success(privacyEnabled)
                 }
                 // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo。
                 "appIcon" -> {
