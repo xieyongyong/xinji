@@ -1,11 +1,10 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'backup/cloud_auto_backup.dart';
 import 'core/app_settings.dart';
 import 'core/crash_log.dart';
+import 'core/frost_texture.dart';
 import 'core/privacy_channel.dart';
 import 'security/lock_service.dart';
 import 'state/app_state.dart';
@@ -38,8 +37,12 @@ Future<void> main() async {
   //   兜底层 —— 原生 FLAG_SECURE，onPause 加、onResume 清。
   // 启动时把用户设置推一次，之后设置页变更时也会实时同步（见 AppSettings.setPrivacyMask）。
   await PrivacyChannel.setEnabled(settings.privacyMask);
-  // 预取应用图标：后台遮罩中央要用，进后台后才能直接用缓存绘制。
-  await PrivacyChannel.preloadAppIcon();
+  // 预取应用图标 + 预渲染磨砂纹理：后台遮罩要用，进后台后才画就来不及了。
+  // 两者互不依赖，并行做，别串起来拖慢启动。
+  await Future.wait([
+    PrivacyChannel.preloadAppIcon(),
+    FrostTexture.preload(),
+  ]);
 
   runApp(XinJiApp(state: appState, lock: lock, settings: settings));
 }
@@ -185,14 +188,18 @@ class _ThemedApp extends StatelessWidget {
   }
 }
 
-/// 切后台时盖住整屏的毛玻璃遮罩。
+/// 切后台时盖住整屏的磨砂遮罩。
 ///
 /// 目的：系统「最近任务」里拍到的缩略图是这一屏，而不是工资明细。
 /// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
 ///
+/// 底图是 [FrostTexture] 预渲染的磨砂纹理，**不是 `BackdropFilter`**。
+/// 真模糊要 10–30ms 光栅 + 一块全屏离屏纹理，点返回键 / 按 Home 时来不及画完，
+/// 系统就会拍到上一帧；换成纹理后整条链路压到 20ms 以内。
+///
 /// 还有一个不显眼但很关键的职责：**告诉原生「遮罩已就绪」**。
 /// Android 13+ 平时把最近任务快照关着（默认白卡），遮罩画好后才置就绪、
-/// 原生立刻放行 —— 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+/// 原生立刻放行 —— 所以拍到的要么是磨砂画面，要么是白卡，绝不会是明文。
 /// 为什么不能等 `onPause` 再放行：荣耀 MagicOS 在 `onPause` 之前就抓图了。
 /// 详见 [PrivacyChannel.markMaskReady]。
 class _PrivacyMask extends StatefulWidget {
@@ -216,27 +223,25 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
     _allowRecentsScreenshot();
   }
 
-  /// 等遮罩**真正上屏**，再告诉原生「本轮就绪」。
+  /// 等遮罩上屏，再告诉原生「本轮就绪」。
   ///
-  /// 原生收到这条消息就**立刻放行**（不等 `onPause`）—— 荣耀 MagicOS 在
-  /// `onPause` 之前就把最近任务缩略图抓走了，等 `onPause` 必然白卡。
+  /// 原生收到就**立刻放行**（不等 `onPause`）—— 荣耀 MagicOS 在 `onPause`
+  /// 之前就把最近任务缩略图抓走了，等 `onPause` 必然白卡。
   ///
-  /// 所以这里的等待必须做足，否则放行的就是旧帧（明文）：
-  ///   1. 第一次 `endOfFrame`：遮罩这一帧交给 raster；
-  ///   2. 第二次 `endOfFrame`：保证第一次的栅格已经落盘；
-  ///   3. 再等 16ms（1 个 vsync）：给 SurfaceFlinger 合成上屏。
-  /// 合计约 30ms。250ms 是硬上限，任何一环超时都**不置就绪** →
-  /// 原生保持「禁止拍」→ 系统给白卡。宁可白卡也不能拍到明文。
+  /// 这里只等**一帧 + 4ms**，不是之前的「两帧 + 16ms」：
+  /// 遮罩已经换成预渲染纹理（光栅 1–2ms，无离屏层），一帧结束时基本已经画完；
+  /// 再多等就是白白错过系统抓图的窗口 —— 点返回键 / 按 Home 退出时窗口只有
+  /// 几十毫秒，之前 46ms 的链路正好卡在外面，表现为「动画里能看到模糊，
+  /// 卡片却是白卡」。
+  ///
+  /// 200ms 是硬上限，超时就**不置就绪** → 原生保持「禁止拍」→ 白卡。
+  /// 宁可白卡也不能拍到明文。
   Future<void> _allowRecentsScreenshot() async {
-    const limit = Duration(milliseconds: 250);
     try {
-      await WidgetsBinding.instance.endOfFrame.timeout(limit);
+      await WidgetsBinding.instance.endOfFrame.timeout(const Duration(milliseconds: 200));
       if (!mounted) return;
-      // 再等一帧：第一帧的栅格化在这期间完成
-      await WidgetsBinding.instance.endOfFrame.timeout(limit);
-      if (!mounted) return;
-      // 留一个 vsync 给合成器上屏
-      await Future<void>.delayed(const Duration(milliseconds: 16));
+      // 纹理光栅很快，这里只留一点余量给 raster 线程收尾
+      await Future<void>.delayed(const Duration(milliseconds: 4));
     } catch (_) {
       return; // 超时：不置就绪，交白卡
     }
@@ -251,59 +256,73 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
     // 抓图只有一两帧，解码根本来不及 —— 表现就是圆盘里空着，
     // 也就是「频繁切换时中心没有应用图标」。RawImage 是同步绘制，零等待。
     final icon = PrivacyChannel.appIconImage;
-    // 毛玻璃：模糊底下这一帧的真实内容，不铺纯白/不透明底，也不放任何文字。
-    // 中央只放应用图标 + 右下角一个闭眼徽标。
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          // 一层很淡的半透明蒙版，压一压底图、让图标更清楚，但不是纯白
-          color: Colors.black.withValues(alpha: 0.28),
-          alignment: Alignment.center,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: 96,
-                height: 96,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.14),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.2),
-                ),
-                alignment: Alignment.center,
-                child: icon != null
-                    ? ClipRRect(
-                        borderRadius: BorderRadius.circular(14),
-                        child: RawImage(
-                          image: icon,
-                          width: 62,
-                          height: 62,
-                          fit: BoxFit.contain,
-                          filterQuality: FilterQuality.medium,
-                        ),
-                      )
-                    : Icon(Icons.visibility_off_outlined, size: 46, color: Colors.white),
-              ),
-              // 右下角闭眼徽标：明确表达「内容已隐藏」
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: Container(
-                  width: 34,
-                  height: 34,
+    final frost = FrostTexture.image;
+    // 磨砂底是**预渲染纹理**，不是 BackdropFilter。
+    // 全屏高斯要 10–30ms，还要每帧分配一块全屏离屏纹理（约 18MB）；
+    // 而点返回键 / 按 Home 退出时，留给遮罩的时间只有几十毫秒，
+    // 真模糊经常来不及画完 → 系统拍到的是上一帧 → 白卡。
+    // 换成一次纹理采样（1–2ms），链路才挤得进那个窗口。
+    return RepaintBoundary(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (frost != null)
+            RawImage(
+              image: frost,
+              fit: BoxFit.cover,
+              filterQuality: FilterQuality.low,
+            )
+          else
+            // 纹理没生成好时的兜底：深色纯色，成本更低、同样不泄露内容
+            const ColoredBox(color: Color(0xFF1E2126)),
+          // 中央只放应用图标 + 右下角一个闭眼徽标，不放任何文字
+          Center(
+            child: Stack(
+              alignment: Alignment.center,
+              clipBehavior: Clip.none,
+              children: [
+                Container(
+                  width: 96,
+                  height: 96,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: kSeed,
-                    border: Border.all(color: Colors.white, width: 2),
+                    color: Colors.white.withValues(alpha: 0.14),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.2),
                   ),
                   alignment: Alignment.center,
-                  child: const Icon(Icons.visibility_off, size: 19, color: Colors.white),
+                  child: icon != null
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: RawImage(
+                            image: icon,
+                            width: 62,
+                            height: 62,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                          ),
+                        )
+                      : const Icon(Icons.visibility_off_outlined, size: 46, color: Colors.white),
                 ),
-              ),
-            ],
+                // 右下角闭眼徽标：明确表达「内容已隐藏」
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: kSeed,
+                      border: Border.all(color: Colors.white, width: 2),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.visibility_off, size: 19, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
