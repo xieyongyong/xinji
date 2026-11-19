@@ -20,6 +20,7 @@ class AppSettings extends ChangeNotifier {
   static const _kLockDelay = 'lock_delay_seconds';
   static const _kHideAmounts = 'hide_amounts';
   static const _kFloatingLock = 'floating_lock';
+  static const _kFloatingLockSize = 'floating_lock_size';
   static const _kCloudAuto = 'cloud_auto_backup';
   static const _kCloudAutoDay = 'cloud_auto_backup_day';
   static const _kCloudAutoLast = 'cloud_auto_backup_last_at';
@@ -61,9 +62,19 @@ class AppSettings extends ChangeNotifier {
   /// 金额打码：把界面上的金额显示成 ¥****（不影响导出和录入）
   bool hideAmounts = false;
 
-  /// 应用内悬浮锁定按钮：半透明、可拖动、吸附屏幕两侧，点一下立即上锁。
+  /// 应用内悬浮锁定按钮：半透明渐变、可拖动、吸附屏幕两侧，点一下立即上锁。
   /// 只在启用应用锁时才有意义。默认关。
   bool floatingLock = false;
+
+  /// 悬浮按钮直径（dp）。档位 40~68，默认 52。
+  int floatingLockSize = 52;
+
+  /// 把任意整数夹到 40~68 且对齐到 4 的倍数，避免老配置/手改配置越界。
+  static int normalizeFloatingLockSize(int v) {
+    if (v < 40) return 40;
+    if (v > 68) return 68;
+    return 40 + ((v - 40) / 4).round() * 4;
+  }
 
   /// 每月自动备份到云盘
   bool cloudAutoBackup = false;
@@ -106,6 +117,7 @@ class AppSettings extends ChangeNotifier {
     hideAmounts = sp.getBool(_kHideAmounts) ?? false;
     kMaskAmounts = hideAmounts;
     floatingLock = sp.getBool(_kFloatingLock) ?? false;
+    floatingLockSize = normalizeFloatingLockSize(sp.getInt(_kFloatingLockSize) ?? 52);
     cloudAutoBackup = sp.getBool(_kCloudAuto) ?? false;
     cloudAutoBackupDay = normalizeBackupDay(sp.getInt(_kCloudAutoDay) ?? 1);
     cloudAutoBackupLastAt = sp.getInt(_kCloudAutoLast) ?? 0;
@@ -164,6 +176,13 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kFloatingLock, v);
+  }
+
+  Future<void> setFloatingLockSize(int v) async {
+    floatingLockSize = normalizeFloatingLockSize(v);
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kFloatingLockSize, floatingLockSize);
   }
 
   Future<void> setLockDelay(int seconds) async {

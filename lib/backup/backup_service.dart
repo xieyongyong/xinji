@@ -56,6 +56,7 @@ class BackupService {
     'privacy_mask',
     'hide_amounts',
     'floating_lock',
+    'floating_lock_size',
     'cloud_auto_backup',
   ];
   static const _prefIntKeys = [

@@ -494,11 +494,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     value: settings.floatingLock,
                     onChanged: (v) => settings.setFloatingLock(v),
                     title: const Text('悬浮锁定按钮', style: TextStyle(fontSize: 14)),
-                    subtitle: Text('屏幕上显示一个可拖动的半透明按钮，紧急时点一下立即锁定',
+                    subtitle: Text('渐变透明的半透明按钮，可拖动、约 1/3 贴边，点一下立即锁定',
                         style: TextStyle(fontSize: 11.5, color: kTextHint)),
                     secondary: Icon(Icons.lock_clock, size: 20, color: kTextBody),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   ),
+                  if (settings.floatingLock) ...[
+                    const Divider(height: 1),
+                    _item(
+                      icon: Icons.format_size,
+                      title: '悬浮按钮大小',
+                      subtitle: '当前 ${settings.floatingLockSize} dp（40–68，点这里微调）',
+                      onTap: () => _pickFloatingLockSize(context, settings),
+                    ),
+                  ],
                 ],
                 const Divider(height: 1),
                 SwitchListTile(
@@ -513,8 +522,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       const InfoHint(
                         size: 13,
                         title: '后台隐藏内容',
-                        text: '切到后台时盖住整屏，最近任务预览图只看到模糊画面，'
-                            '看不到工资明细；回到应用自动恢复。',
+                        text: '切到后台时盖住整屏/禁止最近任务预览，看不到工资明细；'
+                            'Android 13+ 最近任务显示空白卡片，旧系统显示模糊画面。回到应用自动恢复。',
                       ),
                     ],
                   ),
@@ -1043,6 +1052,49 @@ class _SettingsPageState extends State<SettingsPage> {
     );
     if (v == null) return;
     await settings.setLockDelay(v);
+    if (mounted) setState(() {});
+  }
+
+  /// 微调悬浮锁定按钮大小：40~68dp，每档 4dp，设置随备份一起走。
+  Future<void> _pickFloatingLockSize(BuildContext context, AppSettings settings) async {
+    var temp = settings.floatingLockSize.toDouble();
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('悬浮按钮大小', style: TextStyle(fontSize: 15)),
+        content: StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Slider(
+                  value: temp,
+                  min: 40.0,
+                  max: 68.0,
+                  divisions: 7,
+                  label: '${temp.round()}',
+                  onChanged: (v) => setDialogState(() => temp = v),
+                ),
+                Text('当前 ${temp.round()} dp',
+                    style: TextStyle(fontSize: 12, color: kTextSecondary)),
+              ],
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(temp.round()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (picked == null) return;
+    await settings.setFloatingLockSize(picked);
     if (mounted) setState(() {});
   }
 

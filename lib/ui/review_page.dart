@@ -552,7 +552,7 @@ class _ReviewPageState extends State<ReviewPage> {
       context: context,
       builder: (ctx) => _ItemEditDialog(draft: draft),
     );
-    if (result == null) return;
+    if (result == null || !mounted) return;
 
     // 转成信息项：从明细里摘掉，挪到信息项列表（保留原来的数字，只是不参与计算）
     if (result.asInfo) {
@@ -632,7 +632,7 @@ class _ReviewPageState extends State<ReviewPage> {
         isNew: true,
       ),
     );
-    if (result?.draft == null) return;
+    if (result?.draft == null || !mounted) return;
     setState(() {
       _items.add(result!.draft!);
       // 新增后立刻归位：模板里有这一项就插到它的位置，没有就落在同类末尾
@@ -648,7 +648,7 @@ class _ReviewPageState extends State<ReviewPage> {
       context: context,
       builder: (ctx) => _InfoEditDialog(info: _infos[index]),
     );
-    if (result == null) return;
+    if (result == null || !mounted) return;
     setState(() {
       if (result.info != null) {
         _infos[index] = result.info!;
@@ -661,7 +661,7 @@ class _ReviewPageState extends State<ReviewPage> {
       context: context,
       builder: (ctx) => _InfoEditDialog(info: PayInfo(name: '', value: ''), isNew: true),
     );
-    if (result?.info == null) return;
+    if (result?.info == null || !mounted) return;
     setState(() => _infos.add(result!.info!));
   }
 
@@ -1755,10 +1755,14 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       title: Text(widget.isNew ? '添加项目' : '编辑项目'),
-      // 包一层滚动：加了「转成信息项 / 记住归类」以后内容变高了，
-      // 小屏或键盘弹起时会超出屏幕
-      content: SingleChildScrollView(
-        child: Column(
+      // 固定高度 + 内部滚动：点「推算」时只在内部增减一行，
+      // 弹窗本身不会突然撑高；小屏/键盘弹起也不会超出屏幕。
+      content: SizedBox(
+        height: (MediaQuery.of(context).size.height * 0.56)
+            .clamp(320.0, 440.0)
+            .toDouble(),
+        child: SingleChildScrollView(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
@@ -1873,6 +1877,7 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
             ),
           ],
           ],
+          ),
         ),
       ),
       actions: [

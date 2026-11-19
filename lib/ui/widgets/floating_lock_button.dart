@@ -8,12 +8,17 @@ import '../theme.dart';
 
 /// 应用内悬浮锁定按钮。
 ///
-/// 半透明、可拖动，松手吸附到屏幕左右两侧（默认贴右），点一下立即上锁并退回首页。
-/// 纯 Flutter Overlay 实现，退出应用即消失，不需要任何系统权限。
+/// 半透明渐变、无实线边框，可拖动；松手按中心点吸附到屏幕左右两侧，
+/// 默认让约 1/3 露在屏外，既好按又不挡内容。点一下立即上锁。
+/// 纯 Flutter 应用内浮层，退出 App 即消失，不需要系统悬浮窗权限。
 ///
 /// 只在「已启用应用锁」且设置里打开「悬浮锁定按钮」时显示。
 class FloatingLockButton extends StatefulWidget {
-  const FloatingLockButton({super.key});
+  const FloatingLockButton({super.key, this.rootNavigatorKey});
+
+  /// 根 Navigator 的 key：浮层在 MaterialApp.builder 里，不一定能直接
+  /// Navigator.of(context) 找到路由栈，锁定时借它退回首页。
+  final GlobalKey<NavigatorState>? rootNavigatorKey;
 
   @override
   State<FloatingLockButton> createState() => _FloatingLockButtonState();
@@ -22,12 +27,18 @@ class FloatingLockButton extends StatefulWidget {
 class _FloatingLockButtonState extends State<FloatingLockButton> {
   static const _kLeft = 'floating_lock_left';
   static const _kDy = 'floating_lock_dy';
-  static const _size = 52.0;
-  static const _edge = 6.0;
 
-  /// null 表示还没定位（首帧用默认右侧位置）
-  double? _x;
+  SharedPreferences? _sp;
+
+  /// 是否已恢复位置。未恢复时用默认右侧中部。
   double? _y;
+
+  /// 是否正在拖动。拖动中允许自由移动，松手才吸附。
+  bool _dragging = false;
+  double? _dragX;
+
+  /// (true=左, false=右) 位置单独持久化，和当前尺寸解耦。
+  bool _left = false;
 
   @override
   void initState() {
@@ -37,77 +48,118 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
 
   Future<void> _restore() async {
     final sp = await SharedPreferences.getInstance();
+    _sp = sp;
+    if (!mounted) return;
     final left = sp.getBool(_kLeft) ?? false;
     final dy = sp.getDouble(_kDy);
     if (!mounted) return;
-    final w = MediaQuery.of(context).size.width;
     setState(() {
-      _x = left ? _edge : w - _size - _edge;
+      _left = left;
       _y = dy;
     });
   }
 
-  void _onPanEnd(DragEndDetails d, double maxW, double maxH) {
-    if (_x == null || _y == null) return;
-    // x 只有左右两种：按松手时中心点判断就近吸附
-    final centerX = _x! + _size / 2;
-    final toLeft = centerX < maxW / 2;
-    final snappedX = toLeft ? _edge : maxW - _size - _edge;
-    // y 夹在顶栏和底部之间
-    final maxY = maxH - _size - _edge - 70;
-    final snappedY = _y!.clamp(_edge + 40.0, maxY < _edge + 40 ? _edge + 40 : maxY).toDouble();
-    setState(() {
-      _x = snappedX;
-      _y = snappedY;
-    });
-    SharedPreferences.getInstance().then((sp) {
-      sp.setBool(_kLeft, toLeft);
-      sp.setDouble(_kDy, snappedY);
-    });
+  /// 吸附位置：约 1/3 在屏外，2/3 留在屏内；图标稍微往屏内偏，避免被切到。
+  double _snappedX(double width, double size, bool left) {
+    return left ? -size / 3 : width - size * 2 / 3;
+  }
+
+  void _onPanEnd(double size, double width, double minY, double maxY) {
+    if (!_dragging) return;
+    final centerX = (_dragX ?? _snappedX(width, size, _left)) + size / 2;
+    _left = centerX < width / 2;
+    _y = (_y ?? 0).clamp(minY, maxY).toDouble();
+    _dragging = false;
+    _dragX = null;
+    setState(() {});
+    _sp?.setBool(_kLeft, _left);
+    _sp?.setDouble(_kDy, _y!);
   }
 
   void _lock() {
+    if (_dragging) return;
     final lock = context.read<LockService>();
     if (!lock.enabled) return;
     lock.lockNow();
-    Navigator.of(context).popUntil((r) => r.isFirst);
+    final nav = widget.rootNavigatorKey?.currentState;
+    if (nav != null) {
+      nav.popUntil((route) => route.isFirst);
+      return;
+    }
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
   Widget build(BuildContext context) {
-    final settings = context.watch<AppSettings>();
-    final lock = context.watch<LockService>();
-    if (!settings.floatingLock || !lock.enabled) return const SizedBox.shrink();
+    final settings = context.select<AppSettings, bool>((s) => s.floatingLock);
+    final sizeSetting = context.select<AppSettings, int>((s) => s.floatingLockSize);
+    final enabled = context.select<LockService, bool>((l) => l.enabled);
+    final locked = context.select<LockService, bool>((l) => l.locked);
+    if (!settings || !enabled || locked) return const SizedBox.shrink();
 
-    final size = MediaQuery.of(context).size;
-    // 未恢复完成时先放默认右侧中部，避免闪一下
-    final x = _x ?? (size.width - _size - _edge);
-    final y = _y ?? (size.height * 0.45);
+    final media = MediaQuery.of(context).size;
+    final size = sizeSetting.toDouble();
+    const minY = 40.0;
+    final maxY = (media.height - size - 70).clamp(minY, media.height).toDouble();
+    final snappedX = _snappedX(media.width, size, _left);
+    final x = _dragging ? (_dragX ?? snappedX) : snappedX;
+    final y = (_y ?? media.height * 0.45).clamp(minY, maxY).toDouble();
 
     return Positioned(
       left: x,
       top: y,
       child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) {
+          _dragging = true;
+          _dragX = x;
+          _y = y;
+        },
         onPanUpdate: (d) {
           setState(() {
-            _x = (x + d.delta.dx).clamp(0.0, size.width - _size).toDouble();
-            _y = (y + d.delta.dy).clamp(0.0, size.height - _size).toDouble();
+            _dragX = ((_dragX ?? x) + d.delta.dx)
+                .clamp(-size * 0.45, media.width - size * 0.55)
+                .toDouble();
+            _y = ((_y ?? y) + d.delta.dy).clamp(minY, maxY).toDouble();
           });
         },
-        onPanEnd: (d) => _onPanEnd(d, size.width, size.height),
+        onPanEnd: (_) => _onPanEnd(size, media.width, minY, maxY),
         onTap: _lock,
-        child: Container(
-          width: _size,
-          height: _size,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: kSeed.withOpacity(0.28),
-            border: Border.all(color: kSeed.withOpacity(0.55), width: 1.2),
-            boxShadow: [
-              BoxShadow(color: Colors.black.withOpacity(0.18), blurRadius: 8),
-            ],
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              // 渐变透明，没有实线 border；边缘自然淡出，贴边时不显生硬。
+              gradient: RadialGradient(
+                center: Alignment.topLeft,
+                radius: 0.95,
+                colors: [
+                  kSeed.withOpacity(0.62),
+                  kSeed.withOpacity(0.30),
+                  kSeed.withOpacity(0.06),
+                ],
+                stops: const [0.0, 0.55, 1.0],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: kSeed.withOpacity(0.20),
+                  blurRadius: 10,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Transform.translate(
+              // 图标朝屏幕内侧偏一点，1/3 贴边时也不会被切掉。
+              offset: Offset(_left ? 4 : -4, 0),
+              child: Icon(
+                Icons.lock_outline,
+                size: size * 0.46,
+                color: Colors.white.withOpacity(0.92),
+              ),
+            ),
           ),
-          child: Icon(Icons.lock_outline, size: 24, color: Colors.white),
         ),
       ),
     );

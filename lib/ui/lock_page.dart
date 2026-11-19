@@ -4,9 +4,22 @@ import 'package:provider/provider.dart';
 import '../security/lock_service.dart';
 import 'theme.dart';
 
-/// 解锁页：冷启动、以及切后台超过 30 秒回来时显示
+/// 解锁页：冷启动、以及切后台超过设定时长回来时显示
+///
+/// 当作全局锁层用时，需要传根 Navigator 的 key：全局锁层位于 Navigator 之外，
+/// 「忘记 PIN」要靠它把找回页压到最上层。
 class LockPage extends StatefulWidget {
-  const LockPage({super.key});
+  const LockPage({
+    super.key,
+    this.rootNavigatorKey,
+    this.onForgotPin,
+  });
+
+  /// 根 Navigator 的 key。作为普通页面（当前已不再这样用）时可以为空。
+  final GlobalKey<NavigatorState>? rootNavigatorKey;
+
+  /// 全局锁层模式：找回 PIN 页要和锁层显示在同一层，不能压到被锁住的 Navigator 里。
+  final VoidCallback? onForgotPin;
 
   @override
   State<LockPage> createState() => _LockPageState();
@@ -128,6 +141,13 @@ class _LockPageState extends State<LockPage> {
             ),
             TextButton(
               onPressed: () async {
+                // 全局锁层模式：交给上层在同一个覆盖层里切换页面。
+                final onForgot = widget.onForgotPin;
+                if (onForgot != null) {
+                  onForgot();
+                  return;
+                }
+                // 普通页面用法：压到当前 Navigator 上。
                 final ok = await Navigator.of(context).push<bool>(
                   MaterialPageRoute(builder: (_) => const ForgotPinPage()),
                 );
@@ -147,7 +167,17 @@ class _LockPageState extends State<LockPage> {
 
 /// 忘记 PIN：答对提示语即可重设
 class ForgotPinPage extends StatefulWidget {
-  const ForgotPinPage({super.key});
+  const ForgotPinPage({
+    super.key,
+    this.onDone,
+    this.onCancel,
+  });
+
+  /// 全局锁层模式：保存成功后回调上层切回解锁页（锁状态会自行解除）。
+  final VoidCallback? onDone;
+
+  /// 全局锁层模式：返回解锁页。为空时按普通路由 pop 处理。
+  final VoidCallback? onCancel;
 
   @override
   State<ForgotPinPage> createState() => _ForgotPinPageState();
@@ -172,7 +202,17 @@ class _ForgotPinPageState extends State<ForgotPinPage> {
   Widget build(BuildContext context) {
     final lock = context.read<LockService>();
     return Scaffold(
-      appBar: AppBar(title: const Text('找回 PIN')),
+      appBar: AppBar(
+        title: const Text('找回 PIN'),
+        // 全局锁层里没有路由可 pop，给一个显式返回按钮。
+        leading: widget.onCancel != null
+            ? IconButton(
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.arrow_back),
+                tooltip: '返回解锁',
+              )
+            : null,
+      ),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -271,7 +311,13 @@ class _ForgotPinPageState extends State<ForgotPinPage> {
                   return;
                 }
                 await lock.resetPinAfterHint(newPin: pin, newHint: hint);
-                if (context.mounted) Navigator.of(context).pop(true);
+                if (!context.mounted) return;
+                final done = widget.onDone;
+                if (done != null) {
+                  done();
+                } else {
+                  Navigator.of(context).pop(true);
+                }
               },
               child: const Text('保存并解锁'),
             ),

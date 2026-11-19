@@ -1,7 +1,7 @@
 name: xinji
 description: 薪迹 · 本地工资条记录、归档与对比
 publish_to: 'none'
-version: 2.7.0+19
+version: 2.7.1+20
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -9,7 +9,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.6
 
   # 本地数据库
   sqflite: ^2.3.3

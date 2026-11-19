@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -15,6 +14,10 @@ import 'ui/lock_page.dart';
 import 'ui/theme.dart';
 import 'ui/widgets/floating_lock_button.dart';
 import 'ui/widgets/update_progress_strip.dart';
+
+/// 根 Navigator 的 key：全局锁层在 MaterialApp.builder 里，位于 Navigator 之外，
+/// 「忘记 PIN」需要借它把找回页压到最上层。
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -95,7 +98,7 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
             widget.lock.lockNow();
           }
         }
-        // 回到前台撤掉遮罩（该上锁时 _RootGate 会挡）。因为遮罩早已画好，
+        // 回到前台撤掉遮罩（该上锁时全局锁层会挡）。因为遮罩早已画好，
         // 这里是正常的内容过渡，不会出现 v2.6.0 那种「回前台才画再撤」的闪。
         widget.lock.unmask();
         // 回到前台顺手补一次「这个月该备份了」的检查（内部有互斥和退避）
@@ -126,16 +129,21 @@ class _ThemedApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final settings = context.watch<AppSettings>();
-    final lock = context.watch<LockService>();
-    // 遮罩只在"切到后台"时出现；回到前台立刻撤掉（该上锁时 _RootGate 会挡）
-    final showMask = lock.masked && settings.privacyMask;
+    // 只订阅真正影响这里的字段：锁状态变化不再重建整棵 MaterialApp。
+    final seedIndex = context.select<AppSettings, int>((s) => s.seedIndex);
+    final themeMode = context.select<AppSettings, ThemeMode>((s) => s.materialThemeMode);
+    final privacyMask = context.select<AppSettings, bool>((s) => s.privacyMask);
+    final masked = context.select<LockService, bool>((l) => l.masked);
+    final locked = context.select<LockService, bool>((l) => l.enabled && l.locked);
+    // 遮罩只在"切到后台"时出现；回到前台立刻撤掉（该上锁时全局锁层会挡）。
+    final showMask = masked && privacyMask;
     return MaterialApp(
       title: '薪迹',
       debugShowCheckedModeBanner: false,
-      theme: buildTheme(brightness: Brightness.light, seedIndex: settings.seedIndex),
-      darkTheme: buildTheme(brightness: Brightness.dark, seedIndex: settings.seedIndex),
-      themeMode: settings.materialThemeMode,
+      navigatorKey: rootNavigatorKey,
+      theme: buildTheme(brightness: Brightness.light, seedIndex: seedIndex),
+      darkTheme: buildTheme(brightness: Brightness.dark, seedIndex: seedIndex),
+      themeMode: themeMode,
       // 全局浮层：下载进度条/安装提示贴在所有页面底部，切到统计/设置/详情都不消失。
       builder: (context, child) => Stack(
         children: [
@@ -147,12 +155,22 @@ class _ThemedApp extends StatelessWidget {
             child: UpdateProgressStrip(),
           ),
           // 应用内悬浮锁定按钮（可拖动、吸附两侧），设置里可开关
-          const FloatingLockButton(),
+          FloatingLockButton(rootNavigatorKey: rootNavigatorKey),
           // 最后画：遮罩必须盖住包括下载进度条在内的一切
           if (showMask) const Positioned.fill(child: _PrivacyMask()),
+          // 全局锁层：放在 Navigator 之上，锁定时设置页等任何已打开页面都过不了验证。
+          // ModalBarrier 兜住背景点击，LockPage 自己处理按键与指纹。
+          if (locked) ...[
+            const Positioned.fill(
+              child: ModalBarrier(dismissible: false, color: Colors.transparent),
+            ),
+            Positioned.fill(
+              child: _LockOverlay(),
+            ),
+          ],
         ],
       ),
-      home: const _RootGate(),
+      home: const HomePage(),
     );
   }
 }
@@ -220,16 +238,32 @@ class _PrivacyMask extends StatelessWidget {
   }
 }
 
-/// 进门前先过锁
-class _RootGate extends StatelessWidget {
-  const _RootGate();
+/// 全局锁覆盖层：解锁页和「忘记 PIN」页都在 Navigator 之上、同一层切换。
+///
+/// 若把找回页 push 到被锁住的 Navigator，它会被锁层盖住，用户以为按钮没反应。
+class _LockOverlay extends StatefulWidget {
+  const _LockOverlay();
+
+  @override
+  State<_LockOverlay> createState() => _LockOverlayState();
+}
+
+class _LockOverlayState extends State<_LockOverlay> {
+  bool _forgotPin = false;
 
   @override
   Widget build(BuildContext context) {
-    final lock = context.watch<LockService>();
-    if (lock.enabled && lock.locked) {
-      return const LockPage();
-    }
-    return const HomePage();
+    return Material(
+      color: Colors.transparent,
+      child: _forgotPin
+          ? ForgotPinPage(
+              onDone: () => setState(() => _forgotPin = false),
+              onCancel: () => setState(() => _forgotPin = false),
+            )
+          : LockPage(
+              rootNavigatorKey: rootNavigatorKey,
+              onForgotPin: () => setState(() => _forgotPin = true),
+            ),
+    );
   }
 }

@@ -93,6 +93,8 @@ class LockService extends ChangeNotifier {
     _pinHash = hash;
     _hint = newHint;
     locked = false;
+    // 找回 PIN 成功后必须通知，否则全局锁层不会撤掉。
+    notifyListeners();
   }
 
   /// 校验提示语是否答对（忽略大小写与首尾空格）
