@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -54,6 +55,7 @@ class BackupService {
     'de_watermark',
     'privacy_mask',
     'hide_amounts',
+    'floating_lock',
     'cloud_auto_backup',
   ];
   static const _prefIntKeys = [
@@ -98,6 +100,88 @@ class BackupService {
     await File(outPath).writeAsBytes(outBytes);
     return outPath;
   }
+
+  static const MethodChannel _channel = MethodChannel('xinji/app');
+
+  /// 备份文件信息（供「本地备份管理」列表用）
+  static const _tmpPrefix = '.tmp_';
+
+  /// 导出到公共 Download 目录（用户能在文件管理器里直接看到、删掉）。
+  ///
+  /// 流程：生成字节 → 写 cache 临时文件 → 原生用 MediaStore 复制到公共 Download。
+  /// cache 副本留着供「发送到别处」分享用（cache 会被系统自动清理，不算私有备份堆积）；
+  /// 私有 backups/ 目录不再新增文件。
+  Future<DownloadExportResult> exportToDownloads({
+    required bool encrypted,
+    String? password,
+  }) async {
+    final bytes = await buildBytes(encrypted: encrypted, password: password);
+    final stamp = _stamp(DateTime.now());
+    final name = encrypted ? 'xinji_$stamp.xbk' : 'xinji_$stamp.zip';
+
+    final tmpDir = await getTemporaryDirectory();
+    final cacheFile = File(p.join(tmpDir.path, name));
+    await cacheFile.writeAsBytes(bytes);
+
+    try {
+      final shown = await _channel.invokeMethod<String>('saveToDownloads', {
+        'srcPath': cacheFile.path,
+        'displayName': name,
+      });
+      return DownloadExportResult(
+        shownPath: shown ?? 'Download/$name',
+        sharePath: cacheFile.path,
+        size: bytes.length,
+      );
+    } on PlatformException catch (e) {
+      if (await cacheFile.exists()) {
+        try {
+          await cacheFile.delete();
+        } catch (_) {}
+      }
+      throw BackupException('保存到下载目录失败：${e.message ?? e.code}');
+    }
+  }
+
+  /// 列出私有 backups/ 目录里残留的历史备份（含大小、修改时间）。
+  /// 新导出已走公共 Download，这里主要是让用户能清理以前累积的旧备份。
+  Future<List<BackupFileMeta>> listLocalBackups() async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final backupDir = Directory(p.join(docsDir.path, 'backups'));
+    if (!await backupDir.exists()) return [];
+    final out = <BackupFileMeta>[];
+    await for (final ent in backupDir.list(followLinks: false)) {
+      if (ent is! File) continue;
+      final name = p.basename(ent.path);
+      // 跳过临时文件和非备份文件
+      if (name.startsWith(_tmpPrefix)) continue;
+      if (!name.endsWith('.zip') && !name.endsWith('.xbk')) continue;
+      final st = await ent.stat();
+      out.add(BackupFileMeta(
+        path: ent.path,
+        name: name,
+        size: st.size,
+        modified: st.modified,
+      ));
+    }
+    out.sort((a, b) => b.modified.compareTo(a.modified));
+    return out;
+  }
+
+  /// 删除单个本地备份文件。返回是否真的删掉了。
+  Future<bool> deleteLocalBackup(String path) async {
+    final f = File(path);
+    if (!await f.exists()) return false;
+    await f.delete();
+    return true;
+  }
+
+  String _stamp(DateTime now) =>
+      '${now.year}'
+      '${now.month.toString().padLeft(2, '0')}'
+      '${now.day.toString().padLeft(2, '0')}_'
+      '${now.hour.toString().padLeft(2, '0')}'
+      '${now.minute.toString().padLeft(2, '0')}';
 
   /// 生成备份字节（不落地），供本地导出和云盘上传共用。
   Future<List<int>> buildBytes({
@@ -580,6 +664,34 @@ class BackupService {
         iv: enc.IV(Uint8List.fromList(ivBytes)));
     return Uint8List.fromList(plain);
   }
+}
+
+/// 导出到 Download 的结果
+class DownloadExportResult {
+  /// 展示给用户看的路径，如 "Download/xinji_20261119_0930.xbk"
+  final String shownPath;
+  /// cache 里的绝对路径，供「发送到别处」分享用
+  final String sharePath;
+  final int size;
+  DownloadExportResult({
+    required this.shownPath,
+    required this.sharePath,
+    required this.size,
+  });
+}
+
+/// 私有备份目录里的一份备份文件（供「本地备份管理」列表展示）
+class BackupFileMeta {
+  final String path;
+  final String name;
+  final int size;
+  final DateTime modified;
+  BackupFileMeta({
+    required this.path,
+    required this.name,
+    required this.size,
+    required this.modified,
+  });
 }
 
 /// 把 `ArchiveFile.content` 统一转成字节数组。

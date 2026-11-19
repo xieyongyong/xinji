@@ -8,6 +8,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_service.dart';
+import 'backup_manager_page.dart';
 import '../core/app_settings.dart';
 import '../core/app_update.dart';
 import '../core/crash_log.dart';
@@ -21,6 +22,8 @@ import 'employer_page.dart';
 import 'lock_page.dart';
 import 'salary_template_page.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
+import 'widgets/info_hint.dart';
 import 'update_dialog.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -74,7 +77,37 @@ class _SettingsPageState extends State<SettingsPage> {
 
   // ------------------------------------------------------------ 备份
 
-  Future<void> _exportBackup({required bool encrypted}) async {
+  /// 合并后的单一导出入口：先选明文/加密，再走密码、导出到下载目录。
+  Future<void> _exportBackup() async {
+    // 第 1 步：选明文还是加密
+    final encryptedChoice = await showDialog<bool?>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('导出备份'),
+        content: const Text(
+          '明文备份：ZIP 里含 CSV，能用 Excel 直接打开，但谁拿到都能看。\n\n'
+          '加密备份：需要密码才能恢复，适合传到网盘或发给别人。',
+          style: TextStyle(fontSize: 13, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, null),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('明文备份'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('加密备份'),
+          ),
+        ],
+      ),
+    );
+    if (encryptedChoice == null) return;
+    final encrypted = encryptedChoice;
+
+    // 第 2 步：加密的话先要密码
     String? password;
     if (encrypted) {
       password = await _askPassword();
@@ -89,7 +122,10 @@ class _SettingsPageState extends State<SettingsPage> {
     try {
       final db = await AppDb.instance;
       final service = BackupService(db);
-      final path = await service.export(encrypted: encrypted, password: password);
+      final result = await service.exportToDownloads(
+        encrypted: encrypted,
+        password: password,
+      );
 
       final sp = await SharedPreferences.getInstance();
       await sp.setInt('last_backup_at', DateTime.now().millisecondsSinceEpoch);
@@ -97,7 +133,7 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       setState(() => _busy = false);
 
-      final size = (await File(path).length() / 1024).toStringAsFixed(0);
+      final size = (result.size / 1024).toStringAsFixed(0);
       if (!mounted) return;
 
       await showDialog<void>(
@@ -105,8 +141,9 @@ class _SettingsPageState extends State<SettingsPage> {
         builder: (ctx) => AlertDialog(
           title: const Text('备份已生成'),
           content: Text(
-            '${path.split(Platform.pathSeparator).last}\n'
+            '已存到 ${result.shownPath}\n'
             '大小约 $size KB\n\n'
+            '在手机文件管理器的「下载」目录里能找到并删除。\n'
             '${encrypted ? '已加密，恢复时需要这个密码，别忘。' : '未加密，任何拿到文件的人都能打开。'}',
             style: const TextStyle(fontSize: 13, height: 1.6),
           ),
@@ -115,7 +152,7 @@ class _SettingsPageState extends State<SettingsPage> {
             FilledButton(
               onPressed: () {
                 Navigator.pop(ctx);
-                Share.shareXFiles([XFile(path)], text: '薪迹备份');
+                Share.shareXFiles([XFile(result.sharePath)], text: '薪迹备份');
               },
               child: const Text('发送到别处'),
             ),
@@ -242,12 +279,9 @@ class _SettingsPageState extends State<SettingsPage> {
       if (!mounted) return;
       setState(() => _busy = false);
 
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
+      showTip(context,
           '已恢复 ${result.recordCount} 条记录、${result.itemCount} 个明细、'
-          '${result.imageCount} 张图片${result.wasEncrypted ? '（来自加密备份）' : ''}',
-        ),
-      ));
+          '${result.imageCount} 张图片${result.wasEncrypted ? '（来自加密备份）' : ''}');
     } catch (e) {
       _fail('恢复失败：${e is BackupException ? e.message : e}');
     }
@@ -282,7 +316,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void _fail(String msg) {
     if (!mounted) return;
     setState(() => _busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    showTip(context, msg);
   }
 
   // ------------------------------------------------------------ 检查更新
@@ -324,9 +358,7 @@ class _SettingsPageState extends State<SettingsPage> {
       // 已经是最新：顺手把"以后再说"的记录清掉，下次真有新版才会弹
       await UpdateChecker.skipVersion('');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已是最新版本 $current')),
-      );
+      showTip(context, '已是最新版本 $current');
       return;
     }
 
@@ -458,13 +490,14 @@ class _SettingsPageState extends State<SettingsPage> {
                     onTap: () => _pickLockDelay(context, settings),
                   ),
                   const Divider(height: 1),
-                  _item(
-                    icon: Icons.lock_clock,
-                    title: '立即锁定',
-                    onTap: () {
-                      lock.lockNow();
-                      Navigator.of(context).popUntil((r) => r.isFirst);
-                    },
+                  SwitchListTile(
+                    value: settings.floatingLock,
+                    onChanged: (v) => settings.setFloatingLock(v),
+                    title: const Text('悬浮锁定按钮', style: TextStyle(fontSize: 14)),
+                    subtitle: Text('屏幕上显示一个可拖动的半透明按钮，紧急时点一下立即锁定',
+                        style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                    secondary: Icon(Icons.lock_clock, size: 20, color: kTextBody),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   ),
                 ],
                 const Divider(height: 1),
@@ -472,12 +505,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.privacyMask,
                   onChanged: (v) => settings.setPrivacyMask(v),
                   title: const Text('后台隐藏内容', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    '切到后台时盖住整屏，最近任务预览图只看到「内容已隐藏」，'
-                    '看不到工资明细；回到应用自动恢复。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  subtitle: Row(
+                    children: [
+                      Text('切到后台时隐藏工资明细',
+                          style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                      const SizedBox(width: 4),
+                      const InfoHint(
+                        size: 13,
+                        title: '后台隐藏内容',
+                        text: '切到后台时盖住整屏，最近任务预览图只看到模糊画面，'
+                            '看不到工资明细；回到应用自动恢复。',
+                      ),
+                    ],
                   ),
-                  isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: Icon(Icons.visibility_off_outlined, size: 20, color: kTextBody),
                 ),
@@ -500,16 +540,28 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
               ]),
               const SizedBox(height: 18),
-              _sectionTitle('模板'),
               Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                child: Text(
-                  '这两个不是一回事：\n'
-                  '· 项目模板 = 名字词典。决定某一项算收入还是扣款、还有哪些别名，'
-                  '识别和跨月对齐都靠它，全局共用、不分雇主。\n'
-                  '· 工资条模板 = 这家公司工资条长什么样。有哪些字段、按什么顺序排、'
-                  '是月度还是奖金，只管录入时的预填与排序。',
-                  style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
+                padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
+                child: Row(
+                  children: [
+                    Text('模板',
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            color: kTextSecondary,
+                            fontWeight: FontWeight.w500)),
+                    const SizedBox(width: 6),
+                    const InfoHint(
+                      size: 14,
+                      title: '两种模板的区别',
+                      text: '这两个不是一回事：\n'
+                          '· 项目模板 = 名字词典。决定某一项算收入还是扣款、还有哪些别名，'
+                          '识别和跨月对齐都靠它，全局共用、不分雇主。\n'
+                          '· 工资条模板 = 这家公司工资条长什么样。有哪些字段、按什么顺序排、'
+                          '是月度还是奖金，只管录入时的预填与排序。',
+                    ),
+                    Text('（两种，点 ⓘ 看区别）',
+                        style: TextStyle(fontSize: 11, color: kTextHint)),
+                  ],
                 ),
               ),
               _card([
@@ -547,12 +599,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.compressImages,
                   onChanged: (v) => settings.setCompressImages(v),
                   title: const Text('保存时压缩图片', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    '开启：宽度压到 1600、JPEG 质量 88，字仍然看得清，最省空间。\n'
-                    '关闭：原图直接存进 App 私有目录，细节完全保留，但长截图能占好几 MB。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  subtitle: Row(
+                    children: [
+                      Text('开启省空间，关闭保留原图细节',
+                          style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                      const SizedBox(width: 4),
+                      const InfoHint(
+                        size: 13,
+                        title: '保存时压缩图片',
+                        text: '开启：宽度压到 1600、JPEG 质量 88，字仍然看得清，最省空间。\n'
+                            '关闭：原图直接存进 App 私有目录，细节完全保留，但长截图能占好几 MB。',
+                      ),
+                    ],
                   ),
-                  isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: Icon(Icons.compress, size: 20, color: kTextBody),
                 ),
@@ -561,12 +620,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.deWatermark,
                   onChanged: (v) => settings.setDeWatermark(v),
                   title: const Text('识别前去除浅灰水印', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    '把比纸面浅一大截的灰色（水印、屏幕上下的渐变）刷成白，再交给识别。\n'
-                    '如果发现某个浅色小字没被识别出来，可以关掉这里再试一次。',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  subtitle: Row(
+                    children: [
+                      Text('水印刷白后再识别，提升准确率',
+                          style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                      const SizedBox(width: 4),
+                      const InfoHint(
+                        size: 13,
+                        title: '识别前去除浅灰水印',
+                        text: '把比纸面浅一大截的灰色（水印、屏幕上下的渐变）刷成白，再交给识别。\n'
+                            '如果发现某个浅色小字没被识别出来，可以关掉这里再试一次。',
+                      ),
+                    ],
                   ),
-                  isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: Icon(Icons.auto_fix_high, size: 20, color: kTextBody),
                 ),
@@ -578,12 +644,19 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: settings.perfAuto,
                   onChanged: (v) => settings.setPerfAuto(v),
                   title: const Text('绩效工资自动计算', style: TextStyle(fontSize: 14)),
-                  subtitle: Text(
-                    '开启后：绩效工资 = 基本绩效 × 绩效系数。\n'
-                    '没填基本绩效时，一律按「绩效工资 ÷ 系数」反推（推算值不计入合计）',
-                    style: TextStyle(fontSize: 11.5, height: 1.5, color: kTextHint),
+                  subtitle: Row(
+                    children: [
+                      Text('绩效工资 = 基本绩效 × 系数',
+                          style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                      const SizedBox(width: 4),
+                      const InfoHint(
+                        size: 13,
+                        title: '绩效工资自动计算',
+                        text: '开启后：绩效工资 = 基本绩效 × 绩效系数。\n'
+                            '没填基本绩效时，一律按「绩效工资 ÷ 系数」反推（推算值不计入合计）',
+                      ),
+                    ],
                   ),
-                  isThreeLine: true,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 14),
                   secondary: Icon(Icons.functions, size: 20, color: kTextBody),
                 ),
@@ -606,17 +679,19 @@ class _SettingsPageState extends State<SettingsPage> {
               _sectionTitle('备份与恢复'),
               _card([
                 _item(
-                  icon: Icons.enhanced_encryption_outlined,
-                  title: '导出加密备份',
-                  subtitle: '需要密码才能恢复，适合传到网盘或发给自己',
-                  onTap: () => _exportBackup(encrypted: true),
+                  icon: Icons.backup_outlined,
+                  title: '导出备份',
+                  subtitle: '存到手机「下载」目录，可选明文或加密',
+                  onTap: _exportBackup,
                 ),
                 const Divider(height: 1),
                 _item(
-                  icon: Icons.folder_zip_outlined,
-                  title: '导出明文备份',
-                  subtitle: 'ZIP 里含 CSV，可以直接用 Excel 打开看',
-                  onTap: () => _exportBackup(encrypted: false),
+                  icon: Icons.folder_open_outlined,
+                  title: '本地备份管理',
+                  subtitle: '查看并删除以前残留在 App 里、文件管理器删不掉的旧备份',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const BackupManagerPage()),
+                  ),
                 ),
                 const Divider(height: 1),
                 _item(
@@ -854,14 +929,11 @@ class _SettingsPageState extends State<SettingsPage> {
     await busyDialog;
     if (!mounted) return;
     final mb = freed / 1024 / 1024;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(freed <= 0
+    showTip(context,
+        freed <= 0
             ? '没有需要清理的更新缓存'
-            : '已清理更新缓存，释放 ${mb.toStringAsFixed(1)} MB'),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+            : '已清理更新缓存，释放 ${mb.toStringAsFixed(1)} MB',
+        duration: const Duration(seconds: 3));
   }
 
   /// 三个来源一起清：crash.log（Dart 异常）、last_exit.txt（系统退出原因）、

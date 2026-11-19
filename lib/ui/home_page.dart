@@ -18,6 +18,7 @@ import 'lock_page.dart';
 import 'review_page.dart';
 import 'settings_page.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 import 'stats_page.dart';
 import 'update_dialog.dart';
 import 'year_picker.dart';
@@ -152,12 +153,8 @@ class _HomePageState extends State<HomePage> {
             ),
             onPressed: () {
               context.read<AppSettings>().setHideAmounts(!hideAmounts);
-              ScaffoldMessenger.of(context)
-                ..clearSnackBars()
-                ..showSnackBar(SnackBar(
-                  duration: const Duration(seconds: 2),
-                  content: Text(hideAmounts ? '金额已显示' : '金额已打码，再点一次恢复'),
-                ));
+              showTip(context, hideAmounts ? '金额已显示' : '金额已打码，再点一次恢复',
+                  duration: const Duration(seconds: 2));
             },
           ),
           IconButton(

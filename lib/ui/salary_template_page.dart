@@ -6,6 +6,7 @@ import '../data/models.dart';
 import '../data/salary_template.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 
 /// 发薪模板列表。
 ///
@@ -287,9 +288,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
       if (replaced) _fieldsUntouched = true;
     });
     if (replaced && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已换用${templateTypeLabel(v)}模板的字段，可继续调整')),
-      );
+      showTip(context, '已换用${templateTypeLabel(v)}模板的字段，可继续调整');
     }
   }
 
@@ -320,13 +319,11 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
     if (_saving) return;
     final name = _nameCtrl.text.trim();
     if (name.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('给模板起个名字')));
+      showTip(context, '给模板起个名字');
       return;
     }
     if (_fields.isEmpty) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('至少加一个字段')));
+      showTip(context, '至少加一个字段');
       return;
     }
 
@@ -349,7 +346,7 @@ class _SalaryTemplateEditPageState extends State<SalaryTemplateEditPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _saving = false);
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败：$e')));
+      showTip(context, '保存失败：$e');
     }
   }
 

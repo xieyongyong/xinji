@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +13,7 @@ import 'state/app_state.dart';
 import 'ui/home_page.dart';
 import 'ui/lock_page.dart';
 import 'ui/theme.dart';
+import 'ui/widgets/floating_lock_button.dart';
 import 'ui/widgets/update_progress_strip.dart';
 
 Future<void> main() async {
@@ -31,6 +33,8 @@ Future<void> main() async {
   // 后台隐私保护交给原生窗口标志位。启动时把用户设置推一次，
   // 之后设置页变更时也会实时同步（见 AppSettings.setPrivacyMask）。
   await PrivacyChannel.setEnabled(settings.privacyMask);
+  // 预取应用图标：后台遮罩中央要用，进后台后才能直接用缓存绘制。
+  await PrivacyChannel.preloadAppIcon();
 
   runApp(XinJiApp(state: appState, lock: lock, settings: settings));
 }
@@ -142,6 +146,8 @@ class _ThemedApp extends StatelessWidget {
             bottom: 0,
             child: UpdateProgressStrip(),
           ),
+          // 应用内悬浮锁定按钮（可拖动、吸附两侧），设置里可开关
+          const FloatingLockButton(),
           // 最后画：遮罩必须盖住包括下载进度条在内的一切
           if (showMask) const Positioned.fill(child: _PrivacyMask()),
         ],
@@ -161,43 +167,54 @@ class _PrivacyMask extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      // 柔和渐变底，深色/浅色各一套；比原来的纯色块更像"锁屏"而不是"出错"
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: dark
-              ? [const Color(0xFF0E1320), const Color(0xFF1A2233)]
-              : [const Color(0xFFF5F7FB), const Color(0xFFE8ECF5)],
-        ),
-      ),
-      alignment: Alignment.center,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 88,
-            height: 88,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: kSeed.withOpacity(dark ? 0.16 : 0.10),
-              border: Border.all(color: kSeed.withOpacity(0.35), width: 1.5),
-            ),
-            child: Icon(Icons.lock_outlined, size: 38, color: kSeed),
+    final bytes = PrivacyChannel.appIconBytes;
+    // 毛玻璃：模糊底下这一帧的真实内容，不铺纯白/不透明底，也不放任何文字。
+    // 中央只放应用图标 + 右下角一个闭眼徽标。
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          // 一层很淡的半透明蒙版，压一压底图、让图标更清楚，但不是纯白
+          color: Colors.black.withOpacity(0.28),
+          alignment: Alignment.center,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withOpacity(0.14),
+                  border: Border.all(color: Colors.white.withOpacity(0.35), width: 1.2),
+                ),
+                alignment: Alignment.center,
+                child: bytes != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.memory(bytes, width: 62, height: 62, fit: BoxFit.contain),
+                      )
+                    : Icon(Icons.visibility_off_outlined, size: 46, color: Colors.white),
+              ),
+              // 右下角闭眼徽标：明确表达"内容已隐藏"
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: kSeed,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.visibility_off, size: 19, color: Colors.white),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 20),
-          Text('薪迹',
-              style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 2,
-                  color: kTextPrimary)),
-          const SizedBox(height: 8),
-          Text('内容已隐藏 · 回到应用后自动显示',
-              style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
-        ],
+        ),
       ),
     );
   }

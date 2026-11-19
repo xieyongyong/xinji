@@ -1,11 +1,15 @@
 package com.xinji.payslip
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 
 /**
  * 必须继承 FlutterFragmentActivity，不能用默认的 FlutterActivity。
@@ -69,6 +73,26 @@ class MainActivity : FlutterFragmentActivity() {
         }.start()
     }
 
+    // 把应用图标 Drawable 光栅化成 PNG 字节。遮罩要在进后台前就画好，
+    // 所以图由 Dart 在启动时预取缓存，这里只负责产出字节。
+    private fun appIconPng(): ByteArray {
+        val d = packageManager.getApplicationIcon(packageName)
+        val bmp: Bitmap = if (d is BitmapDrawable && d.bitmap != null) {
+            d.bitmap
+        } else {
+            val w = d.intrinsicWidth.coerceAtLeast(1)
+            val h = d.intrinsicHeight.coerceAtLeast(1)
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val c = Canvas(b)
+            d.setBounds(0, 0, w, h)
+            d.draw(c)
+            b
+        }
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return out.toByteArray()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
@@ -81,6 +105,14 @@ class MainActivity : FlutterFragmentActivity() {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
                     applyPrivacyFlag()
                     result.success(true)
+                }
+                // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo（闭眼态）。
+                "appIcon" -> {
+                    try {
+                        result.success(appIconPng())
+                    } catch (t: Throwable) {
+                        result.error("app_icon_failed", t.message, null)
+                    }
                 }
                 else -> result.notImplemented()
             }
