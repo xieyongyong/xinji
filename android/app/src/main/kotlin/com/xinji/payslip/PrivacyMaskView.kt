@@ -14,18 +14,22 @@ import android.util.AttributeSet
 import android.view.View
 
 /**
- * 后台隐私遮罩的 **兜底实现**：一个常驻的普通 View，平时 alpha = 0。
+ * 后台隐私遮罩，常驻在 FlutterView 之上，平时 alpha = 0。
  *
- * 主实现是 [PrivacyMaskSurfaceView] —— 只有 SurfaceView 能把 buffer 同步提交给
- * SurfaceFlinger，绕开「改 UI 要等一帧」这条死路。这个 View 留着是因为
- * 个别 ROM 上 SurfaceView 的行为不可预期（透明层不进合成、ZOrderOnTop 被改写等），
- * 那时至少还有一帧普通 View 能补上。
+ * ## 为什么只保留这一个实现
+ * 为了让遮罩「稳定被拍进最近任务」，之前试过四层更激进的做法：
+ *   ① `onPause` 里临时 addView；
+ *   ② 常驻 View 只切 alpha；
+ *   ③ 常驻 `SurfaceView` + `lockCanvas/unlockCanvasAndPost` 同步提交 buffer；
+ *   ④ 常驻 `SurfaceView` + `SurfaceControl.Transaction.setAlpha()` 切 layer alpha，
+ *      buffer 里常放不透明遮罩内容。
+ * ③④ 在测机上「全面屏上滑回桌面」依旧拍不到；而 ④ 更糟 —— 那层 layer 的 alpha
+ * 会在 surface 重建（窗口 relayout、从后台回到前台、尺寸变化）时被系统复位成 1，
+ * 不透明遮罩内容就直接盖在前台界面上，App 完全没法用。
  *
- * ## 为什么普通 View 不可靠
- * 系统在 onPause 之后就抓最近任务缩略图。改 alpha 之后还要走
- *   等 vsync → measure/layout/draw → RenderThread 上传 buffer → 合成
- * 至少一帧，几乎必然晚于抓图。`onUserLeaveHint` 也救不了 —— 它和 onPause 是
- * 同一个 binder 消息里连续调用的，中间主线程不返回，一次 vsync 都等不到。
+ * 结论：在 App 层，遮罩只能做到「尽力而为」。现在选择的是
+ * **宁可偶尔漏拍，也绝不影响正常使用** —— 一个普通 View，alpha 0/1，
+ * 拿不到焦点或回到前台时一律压到 0。
  *
  * ## 底图是真实画面的模糊
  * 由 MainActivity 用 PixelCopy 抓 Flutter SurfaceView 的 buffer

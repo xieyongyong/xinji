@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
-import android.view.SurfaceControl
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
@@ -38,10 +37,14 @@ class MainActivity : FlutterFragmentActivity() {
     // 预取的应用图标：onPause 里现读 PackageManager 会拖慢遮罩上屏。
     private var appIconDrawable: Drawable? = null
 
-    // 遮罩的两个实现，同时挂上：
-    //   maskSurface —— 主路径，SurfaceView 能同步提交 buffer，绕开 UI 渲染管线；
-    //   maskView    —— 兜底，万一某些 ROM 上 Surface 不进快照，还有普通 View 那一帧。
-    private var maskSurface: PrivacyMaskSurfaceView? = null
+    // 遮罩只有一个实现：常驻的普通 View，平时 alpha = 0。
+    //
+    // 这里曾经并行挂过一个 ZOrderOnTop 的 SurfaceView，用 SurfaceControl 事务切
+    // layer alpha 来实现「零等待」。它的 buffer 里必须一直放着不透明遮罩内容，
+    // 一旦那层 layer 的 alpha 被系统复位（surface 重建、窗口 relayout、从后台回来
+    // 都会发生），不透明内容就直接盖在前台界面上 —— 用户看到的是「正在用着 App，
+    // 界面突然被糊住」，等于把 App 用废了。而它换来的后台命中率也没提升
+    // （全面屏上滑回桌面依旧不生效），收益为负，整段已移除。
     private var maskView: PrivacyMaskView? = null
 
     // 最近一张「当前画面」的缩小模糊图。模糊之后新旧几乎看不出差别，
@@ -54,115 +57,65 @@ class MainActivity : FlutterFragmentActivity() {
     // onResume 后补抓快照的延时任务，重复 onResume 时先撤掉旧的，避免堆积。
     private val snapshotTask = Runnable { refreshSnapshot() }
 
-    /** 首次进入前台时把两层遮罩都挂上，之后一直常驻，只在进出后台时切换状态。 */
-    private fun attachMasksIfNeeded() {
+    /** 首次进入前台时把遮罩挂上，之后一直常驻，只在进出后台时切 alpha。 */
+    private fun attachMaskIfNeeded() {
+        if (maskView != null) return
         val root = findViewById<ViewGroup>(android.R.id.content) ?: return
-
-        if (maskView == null) {
-            val v = PrivacyMaskView(this)
-            v.bindIcon(appIconDrawable)
-            v.bindSnapshot(lastSnapshot)
-            v.alpha = 0f
-            v.isClickable = false
-            v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            try {
-                root.addView(
-                    v,
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                maskView = v
-            } catch (_: Throwable) {
-                // 极端情况下（窗口已销毁）忽略，不能因为遮罩失败影响正常退到后台
-            }
-        }
-
-        if (maskSurface == null) {
-            val s = PrivacyMaskSurfaceView(this)
-            s.bindIcon(appIconDrawable)
-            s.bindSnapshot(lastSnapshot)
-            try {
-                root.addView(
-                    s,
-                    ViewGroup.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                    ),
-                )
-                maskSurface = s
-            } catch (_: Throwable) {
-            }
+        val v = PrivacyMaskView(this)
+        v.bindIcon(appIconDrawable)
+        v.bindSnapshot(lastSnapshot)
+        v.alpha = 0f
+        v.isClickable = false
+        v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        try {
+            root.addView(
+                v,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+            maskView = v
+        } catch (_: Throwable) {
+            // 极端情况下（窗口已销毁）忽略，不能因为遮罩失败影响正常退到后台
         }
     }
 
     /**
-     * 亮遮罩。**这是整套方案唯一的关键动作，必须同步完成。**
+     * 亮遮罩：只切 alpha。
      *
-     * 主路径交给 SurfaceView：`lockCanvas` → 画 → `unlockCanvasAndPost`
-     * 同步把 buffer 提交给 SurfaceFlinger，不等 vsync、不走 measure/layout/draw，
-     * 所以系统抓最近任务快照时一定已经能看到它。
-     * 普通 View 那条只是兜底，它的 alpha 切换仍然要等一帧 —— 不可靠，但不能删。
+     * 说清楚能力边界：改 alpha 要走「等 vsync → draw → 上传 buffer → 合成」，
+     * 系统抓最近任务快照基本都早于这一帧，所以**它不保证一定拍得到**。
+     * 之前试过的四条更激进的路（临时 addView / 常驻 View / lockCanvas 同步 post /
+     * SurfaceControl 事务切 layer alpha）要么同样失效，要么在前台把界面糊住，
+     * 都已回退。现在选择的是「宁可偶尔漏拍，也绝不影响正常使用」。
      */
     private fun showMask() {
         if (!privacyEnabled) return
         if (isFinishing || isDestroyed) return
-
-        if (maskSurface == null || maskView == null) attachMasksIfNeeded()
-
-        // 主路径：合成器事务，一步到位
-        maskSurface?.showMask()
-
-        // 双保险：把 Flutter 自己那层 surface 也压透明。
-        // 万一某些 ROM 不把 ZOrderOnTop 的 layer 算进快照，至少拍到的不是明文。
-        setFlutterLayerAlpha(0f)
-
-        // 兜底路径
-        val v = maskView
-        if (v != null) {
-            v.isClickable = true
-            v.alpha = 1f
+        var v = maskView
+        if (v == null) {
+            // 还没挂过（理论上不会发生，onResume 已确保挂载），补救一次
+            attachMaskIfNeeded()
+            v = maskView
         }
+        val view = v ?: return
+        view.isClickable = true
+        view.alpha = 1f
+        view.invalidate()
     }
 
     private fun hideMask() {
-        maskSurface?.hideMask()
-        // 恢复必须做两次：事务偶发失败会让 Flutter 一直不可见（表现为黑屏），
-        // 延时那次用来兜住「第一次没赶上 surface 重建」的情况。
-        setFlutterLayerAlpha(1f)
-        window?.decorView?.postDelayed({ setFlutterLayerAlpha(1f) }, 150)
         val v = maskView ?: return
         v.alpha = 0f
         v.isClickable = false
     }
 
-    /**
-     * 直接改 Flutter 那层 surface 在 SurfaceFlinger 里的 alpha。
-     *
-     * 这是比「改 View」更底层的一步：不产生 buffer、不等 App 出帧，
-     * 事务提交后内容立刻从合成结果里消失。
-     */
-    private fun setFlutterLayerAlpha(alpha: Float) {
-        val sv = findFlutterSurfaceView() ?: return
-        // 不能声明成 SurfaceControl?：setAlpha 的形参非空，
-        // `?: return` 之后已经是非空类型（写成可空会直接编译失败）。
-        val sc: SurfaceControl = try {
-            sv.surfaceControl
-        } catch (_: Throwable) {
-            null
-        } ?: return
-        try {
-            SurfaceControl.Transaction().setAlpha(sc, alpha).apply()
-        } catch (_: Throwable) {
-        }
-    }
-
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        // 拿到焦点说明用户已经在看 App 了，这里再确保一次 Flutter 内容是可见的，
-        // 避免上一次事务失败留下黑屏。
-        if (hasFocus) setFlutterLayerAlpha(1f)
+        // 窗口拿到焦点 = 用户正在看这个界面，任何遮罩都必须撤掉。
+        // 这是最后一层保险：只要前台被遮一下，就是不可接受的故障。
+        if (hasFocus) hideMask()
     }
 
     /**
@@ -202,7 +155,6 @@ class MainActivity : FlutterFragmentActivity() {
                         val old = lastSnapshot
                         lastSnapshot = bmp
                         maskView?.bindSnapshot(bmp)
-                        maskSurface?.bindSnapshot(bmp)
                         old?.takeIf { it !== bmp }?.recycle()
                     } else {
                         bmp.recycle()
@@ -225,8 +177,6 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun findSurface(v: View): SurfaceView? {
-        // 必须跳过自己的遮罩层，否则 PixelCopy 抓到的是一张全透明的遮罩
-        if (v is PrivacyMaskSurfaceView) return null
         if (v is SurfaceView && v.visibility == View.VISIBLE) return v
         if (v is ViewGroup) {
             for (i in 0 until v.childCount) {
@@ -242,8 +192,7 @@ class MainActivity : FlutterFragmentActivity() {
      *
      * 注意它**并不比 onPause 早**：两者是同一个 binder 消息（handlePauseActivity）
      * 里前后脚调用的，中间主线程不返回消息队列，一次 vsync 都等不到。
-     * 留在这里的价值只是把 Surface 的 buffer 提交再往前挪一点点 ——
-     * 真正让遮罩稳定生效的是 [PrivacyMaskSurfaceView] 的同步 post，不是这个时机。
+     * 所以这里只是「顺手把遮罩亮起来」，真正的机会和限制都写在 [showMask] 的注释里。
      */
     override fun onUserLeaveHint() {
         if (!isFinishing) {
@@ -263,7 +212,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        attachMasksIfNeeded()
+        attachMaskIfNeeded()
         hideMask()
         // 空闲后补一张新快照，供下一次离开时使用。800ms 是为了让首帧和
         // 页面动画都停下来，免得抓到一张过渡中的画面。
@@ -276,7 +225,6 @@ class MainActivity : FlutterFragmentActivity() {
         window?.decorView?.removeCallbacks(snapshotTask)
         lastSnapshot?.recycle()
         lastSnapshot = null
-        maskSurface = null
         maskView = null
         super.onDestroy()
     }
