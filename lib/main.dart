@@ -208,22 +208,33 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
     _allowRecentsScreenshot();
   }
 
-  /// 等这一帧走完，再允许系统拍快照。
+  /// 等遮罩**真正上屏**，再允许系统拍快照。
   ///
-  /// 200ms 是硬上限：系统抓图窗口就那么点，超时说明这一帧没赶上，
-  /// 此时**不能**放行 —— 保持「禁止拍」，系统会给白卡。
+  /// 只等一次 `endOfFrame` 是不够的 —— 它只保证 UI 线程走完 build/layout/paint
+  /// 并把 layer tree 交给 raster 线程，此时屏幕上最后一帧**还是明文**。
+  /// 这次放行太早，系统紧接着抓帧，抓到的就是那帧明文。
+  ///
+  /// 所以按「UI 提交 → 栅格完成 → 合成上屏」三段来等：
+  ///   1. 第一次 endOfFrame：遮罩这一帧交给 raster；
+  ///   2. 第二次 endOfFrame：再要一帧，保证第一次的栅格已经落盘；
+  ///   3. 再等 2 个 vsync（约 32ms）：给 SurfaceFlinger 合成上屏。
+  /// 合计约 50ms，正常抓图窗口（几十到上百 ms）都吃得下。
+  ///
+  /// 250ms 是硬上限：任何一环超时都**不放行**，保持「禁止拍」→ 系统给白卡。
   /// 宁可白卡也不能拍到明文，这是这套机制的唯一底线。
-  ///
-  /// 说明一个精度边界：`endOfFrame` 只保证 UI 线程走完 build/layout/paint
-  /// 并把 layer tree 交给 raster 线程，**不等于已经合成上屏**。
-  /// 所以这里放行仍可能早于最后一刻；真正的兜底在原生侧 ——
-  /// `maskVisible` 带 `foreground` 守卫，会把「上一轮的迟到放行」丢掉，
-  /// 保证它没法把新一轮 onResume 刚做的重置又打开。
+  /// 「上一轮的迟到放行」另由原生侧 `foreground` 守卫丢弃。
   Future<void> _allowRecentsScreenshot() async {
+    const limit = Duration(milliseconds: 250);
     try {
-      await WidgetsBinding.instance.endOfFrame.timeout(const Duration(milliseconds: 200));
+      await WidgetsBinding.instance.endOfFrame.timeout(limit);
+      if (!mounted) return;
+      // 再等一帧：第一帧的栅格化在这期间完成
+      await WidgetsBinding.instance.endOfFrame.timeout(limit);
+      if (!mounted) return;
+      // 留两个 vsync 给合成器上屏
+      await Future<void>.delayed(const Duration(milliseconds: 32));
     } catch (_) {
-      return; // 超时：不放行
+      return; // 超时：不放行，交白卡
     }
     if (!mounted) return; // 遮罩已经被撤掉（比如瞬间又回到前台），没必要放行
     await PrivacyChannel.markMaskVisible();
