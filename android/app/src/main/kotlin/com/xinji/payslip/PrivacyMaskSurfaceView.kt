@@ -10,24 +10,32 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.util.AttributeSet
+import android.view.SurfaceControl
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 
 /**
- * 后台隐私遮罩的主实现：一个常驻、平时全透明的 SurfaceView。
+ * 后台隐私遮罩的主实现：一个常驻的 SurfaceView。
  *
- * ## 为什么不用普通 View
- * 系统在 `onPause` 返回后极短时间就抓最近任务快照。普通 View 改 alpha 之后还要
+ * ## 为什么普通 View 不行
+ * 系统在 `onPause` 返回后极短时间就抓最近任务快照。普通 View 改 alpha 之后还要走
  *   等 vsync → measure/layout/draw → RenderThread 上传 buffer → 合成
- * 至少一帧，几乎必然晚于抓图。而 SurfaceView 有自己独立的 surface，
- * `lockCanvas()` → 画 → `unlockCanvasAndPost()` 是**同步提交 buffer** 的，
- * 完全绕开 UI 线程的渲染管线，只剩 SurfaceFlinger 合成这一步 ——
- * 系统抓图读的也是合成结果，所以只要 buffer 先到就一定拍得到。
+ * 至少一帧，几乎必然晚于抓图。`onUserLeaveHint` 也救不了 —— 它和 onPause 是
+ * 同一个 binder 消息里连续调用的，中间主线程不返回，一次 vsync 都等不到。
  *
- * ## 平时为什么是透明的
- * `setZOrderOnTop(true)` 让这层 surface 位于 window 之上。平时画一帧全透明，
- * 用户看到的仍然是 Flutter 界面；`showMask()` 时同步画上模糊图 + 图标，
- * 下一帧合成就是遮罩。整个过程约 2~5ms，全部在 UI 线程同步完成。
+ * ## 为什么连 lockCanvas 也不行
+ * `lockCanvas` → `unlockCanvasAndPost` 确实是同步提交 buffer 的，但它提交完
+ * 还得等 SurfaceFlinger **下一次合成**才会出现在抓图结果里。实测全面屏上滑回桌面
+ * 仍然失效 —— 系统那条路径抓得更早。
+ *
+ * ## 现在的做法：只改合成参数，不产生任何新 buffer
+ * `SurfaceView.getSurfaceControl()` 能拿到这层 surface 在 SurfaceFlinger 里的句柄，
+ * 用 `SurfaceControl.Transaction.setAlpha()` 切可见性。事务是直接交给合成器执行的，
+ * 不经过 App 出帧、不经过 buffer 上传，是这条链路上唯一还能再提前的手段。
+ *
+ * 具体做法：**buffer 里一直放的是遮罩内容**，平时用事务把 layer alpha 压到 0
+ * （用户看到的仍然是 Flutter 界面），需要时一个事务拉回 1。
+ * 拿不到 SurfaceControl 的机型自动退回「改内容」的老路径（画遮罩 / 清透明）。
  */
 class PrivacyMaskSurfaceView @JvmOverloads constructor(
     context: Context,
@@ -42,8 +50,11 @@ class PrivacyMaskSurfaceView @JvmOverloads constructor(
 
     private var icon: Drawable? = null
 
-    /** 当前是否处于「遮住」状态。false 时 surface 上是一帧全透明 */
-    private var showing = false
+    /** 逻辑上的「是否遮住」 */
+    private var contentVisible = false
+
+    /** 是否成功用上了 SurfaceControl 事务路径。用上之后 buffer 永远是遮罩内容 */
+    private var layerMode = false
 
     private val snapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
@@ -81,24 +92,75 @@ class PrivacyMaskSurfaceView @JvmOverloads constructor(
 
     fun bindSnapshot(b: Bitmap?) {
         blurred = b
-        if (showing) render()
+        // layer 不可见时这一步用户完全感知不到，下次亮遮罩直接就是新底图
+        render()
     }
 
-    /** 立刻把遮罩画进 surface 并提交。这是 onPause 里唯一的关键动作。 */
+    /** 亮遮罩：优先用合成器事务，一步到位。 */
     fun showMask() {
-        showing = true
+        contentVisible = true
+        if (layerMode) {
+            // buffer 里已经是遮罩内容，只需要把 layer 拉回可见
+            if (applyLayerAlpha(1f)) return
+            // 事务突然不可用了（surface 重建等），退回「改内容」路径
+            layerMode = false
+        }
+        if (applyLayerAlpha(1f)) {
+            // 事务可用：buffer 补一帧遮罩内容，之后固定不再变
+            layerMode = true
+            render()
+            return
+        }
+        // 事务不可用，退回老路径：把遮罩画进 surface
         render()
     }
 
-    /** 恢复成全透明。 */
+    /** 撤遮罩：事务可用时只压 alpha，buffer 保持不动，下次亮起来是零成本。 */
     fun hideMask() {
-        if (!showing) return
-        showing = false
+        contentVisible = false
+        if (applyLayerAlpha(0f)) {
+            layerMode = true
+            // 关键：buffer 必须同步成遮罩内容。否则下次 showMask 只切 alpha 时，
+            // 显示的是一张从未画过的空 buffer，等于完全没遮罩。
+            // 此刻 layer 不可见，这帧重绘用户完全感知不到。
+            render()
+            return
+        }
+        // 事务不可用：退回内容控制。这里必须把 layerMode 置回 false，
+        // 否则 render() 会画遮罩，而 layer alpha 若残留 1 就会糊住整个界面。
+        layerMode = false
         render()
+    }
+
+    /**
+     * 用 SurfaceControl 事务切 layer alpha。
+     *
+     * 这是整条链路里唯一「不产生新 buffer、不等合成队列」的操作：
+     * 事务直接由 SurfaceFlinger 应用。
+     *
+     * @return true 表示事务提交成功；false 表示这层拿不到 SurfaceControl，
+     *         调用方需要退回「改内容」的老路径。
+     */
+    private fun applyLayerAlpha(alpha: Float): Boolean {
+        val sc: SurfaceControl? = try {
+            surfaceControl
+        } catch (_: Throwable) {
+            null
+        } ?: return false
+
+        return try {
+            SurfaceControl.Transaction()
+                .setAlpha(sc, alpha)
+                .apply()
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
-        // 首次创建 / 从后台回来 surface 重建时补一帧，避免出现未定义的底色
+        // 先把 layer 压到不可见，再画内容 —— 否则会出现一帧遮罩闪烁
+        layerMode = applyLayerAlpha(0f)
         render()
     }
 
@@ -109,10 +171,12 @@ class PrivacyMaskSurfaceView @JvmOverloads constructor(
     override fun surfaceDestroyed(holder: SurfaceHolder) {}
 
     /**
-     * 同步往 surface 里画一帧。
+     * 往 surface 里画一帧。
      *
-     * `lockCanvas` 无参版本拿到的是整块可写 buffer（保留上一帧内容），
-     * 所以两条分支都必须自己铺满，不能指望它自动清空。
+     * 事务路径下 buffer 恒为遮罩内容（可见性交给合成器）；
+     * 兜底路径下按 [contentVisible] 决定画遮罩还是清成全透明。
+     *
+     * `lockCanvas` 无参版本拿到的 buffer 保留上一帧内容，两条分支都必须自己铺满。
      */
     @Synchronized
     private fun render() {
@@ -125,13 +189,13 @@ class PrivacyMaskSurfaceView @JvmOverloads constructor(
         } ?: return
 
         try {
-            if (showing) {
+            if (layerMode || contentVisible) {
                 drawMask(canvas)
             } else {
                 canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
             }
         } catch (_: Throwable) {
-            // 画失败就直接 post（可能是半帧），至少不会崩
+            // 画失败也照常 post（可能是半帧），至少不会崩
         } finally {
             try {
                 h.unlockCanvasAndPost(canvas)

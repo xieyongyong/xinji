@@ -231,11 +231,14 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
    - 连原生普通 View 也不行 —— 改完 alpha 还要等 vsync → measure/layout/draw → 上传 buffer → 合成，
      至少一帧。而 `onUserLeaveHint` 并不比 `onPause` 早（两者是同一个 binder 消息里连续调用的），
      指望「提前触发」是错的。
-   所以遮罩改用 **`SurfaceView`**（`PrivacyMaskSurfaceView`，`setZOrderOnTop(true)` + 全透明）：
-   `lockCanvas()` → 画 → `unlockCanvasAndPost()` 是**同步提交 buffer** 的，
-   完全绕开 UI 线程的渲染管线，只剩 SurfaceFlinger 合成这一步；系统抓图读的也是合成结果，
-   只要 buffer 先到就一定拍得到。平时画一帧全透明，用户看到的仍是 Flutter 界面。
-   另有一个普通 View 版本（`PrivacyMaskView`）同时常驻做兜底，防止个别 ROM 上 Surface 不进快照。
+   所以遮罩改用 **`SurfaceView` + SurfaceFlinger 事务**（`PrivacyMaskSurfaceView`）：
+   这层 surface 常驻（`setZOrderOnTop(true)`），buffer 里一直放着模糊图 + 图标，
+   平时用 `SurfaceControl.Transaction.setAlpha()` 把 layer 压到 0（用户看到的仍是 Flutter 界面），
+   需要时一个事务拉回 1。事务直接交给合成器执行，**不产生新 buffer、不等 App 出帧**，
+   是这条链路上唯一还能再提前的手段。同时把 Flutter 那层 surface 也压透明做双保险 ——
+   万一某些 ROM 不把 ZOrderOnTop 的 layer 算进快照，拍到的也不会是明文。
+   （`lockCanvas` + `unlockCanvasAndPost` 的版本试过，仍需等一次合成，实测全面屏手势仍然失效。）
+   另有一个普通 View 版本（`PrivacyMaskView`）同时常驻做兜底。
    遮罩底图是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
    （SurfaceView 的内容不在 `View.draw` 里，`decorView.draw` 只能画出一个洞），
    缩到 1/6 宽后放大铺满 —— 放大本身即强低通滤波 —— 再叠一层轻微压暗 + 中央应用图标 + `visibility_off` 徽标。

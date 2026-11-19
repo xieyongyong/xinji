@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
+import android.view.SurfaceControl
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
@@ -110,8 +111,12 @@ class MainActivity : FlutterFragmentActivity() {
 
         if (maskSurface == null || maskView == null) attachMasksIfNeeded()
 
-        // 主路径
+        // 主路径：合成器事务，一步到位
         maskSurface?.showMask()
+
+        // 双保险：把 Flutter 自己那层 surface 也压透明。
+        // 万一某些 ROM 不把 ZOrderOnTop 的 layer 算进快照，至少拍到的不是明文。
+        setFlutterLayerAlpha(0f)
 
         // 兜底路径
         val v = maskView
@@ -123,9 +128,39 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun hideMask() {
         maskSurface?.hideMask()
+        // 恢复必须做两次：事务偶发失败会让 Flutter 一直不可见（表现为黑屏），
+        // 延时那次用来兜住「第一次没赶上 surface 重建」的情况。
+        setFlutterLayerAlpha(1f)
+        window?.decorView?.postDelayed({ setFlutterLayerAlpha(1f) }, 150)
         val v = maskView ?: return
         v.alpha = 0f
         v.isClickable = false
+    }
+
+    /**
+     * 直接改 Flutter 那层 surface 在 SurfaceFlinger 里的 alpha。
+     *
+     * 这是比「改 View」更底层的一步：不产生 buffer、不等 App 出帧，
+     * 事务提交后内容立刻从合成结果里消失。
+     */
+    private fun setFlutterLayerAlpha(alpha: Float) {
+        val sv = findFlutterSurfaceView() ?: return
+        val sc: SurfaceControl? = try {
+            sv.surfaceControl
+        } catch (_: Throwable) {
+            null
+        } ?: return
+        try {
+            SurfaceControl.Transaction().setAlpha(sc, alpha).apply()
+        } catch (_: Throwable) {
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // 拿到焦点说明用户已经在看 App 了，这里再确保一次 Flutter 内容是可见的，
+        // 避免上一次事务失败留下黑屏。
+        if (hasFocus) setFlutterLayerAlpha(1f)
     }
 
     /**
