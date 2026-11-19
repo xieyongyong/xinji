@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
@@ -15,19 +14,18 @@ import android.util.AttributeSet
 import android.view.View
 
 /**
- * 切后台时的隐私遮罩，常驻在 FlutterView 之上，平时 alpha = 0。
+ * 后台隐私遮罩的 **兜底实现**：一个常驻的普通 View，平时 alpha = 0。
  *
- * ## 为什么是原生 View
- * Flutter 的 didChangeAppLifecycleState 要走
- *   platform channel → Dart isolate → scheduler → build/layout/paint → raster → 合成
- * 一整条链路，而系统在 onPause 之后就抓最近任务缩略图；Activity 一旦不可见，
- * Flutter engine 还会暂停帧调度，那帧遮罩可能永远画不出来。
+ * 主实现是 [PrivacyMaskSurfaceView] —— 只有 SurfaceView 能把 buffer 同步提交给
+ * SurfaceFlinger，绕开「改 UI 要等一帧」这条死路。这个 View 留着是因为
+ * 个别 ROM 上 SurfaceView 的行为不可预期（透明层不进合成、ZOrderOnTop 被改写等），
+ * 那时至少还有一帧普通 View 能补上。
  *
- * ## 为什么要常驻，而不是 onPause 时才 addView
- * 临时 addView 要走 measure → layout → draw → 上传 buffer → 合成，至少一帧；
- * 系统抓图几乎总是早于这一帧，实测「大部分时候没生效」就是这个原因。
- * 常驻之后切到可见只差一次 draw，再由 MainActivity 提前到 onUserLeaveHint
- * 触发，就有足够的时间在抓图前上屏。
+ * ## 为什么普通 View 不可靠
+ * 系统在 onPause 之后就抓最近任务缩略图。改 alpha 之后还要走
+ *   等 vsync → measure/layout/draw → RenderThread 上传 buffer → 合成
+ * 至少一帧，几乎必然晚于抓图。`onUserLeaveHint` 也救不了 —— 它和 onPause 是
+ * 同一个 binder 消息里连续调用的，中间主线程不返回，一次 vsync 都等不到。
  *
  * ## 底图是真实画面的模糊
  * 由 MainActivity 用 PixelCopy 抓 Flutter SurfaceView 的 buffer
@@ -66,18 +64,6 @@ class PrivacyMaskView @JvmOverloads constructor(
         strokeWidth = dp(1.2f)
         color = Color.argb(0x59, 0xFF, 0xFF, 0xFF) // 35% 白描边
     }
-    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-        color = Color.WHITE
-    }
-    private val eyePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = dp(1.6f)
-        strokeCap = Paint.Cap.ROUND
-        color = Color.argb(0xE6, 0x2A, 0x2E, 0x33) // 深灰，闭眼图形
-    }
-
-    private val eyePath = Path()
     private val srcRect = Rect()
     private val dstRect = Rect()
 
@@ -153,24 +139,7 @@ class PrivacyMaskView @JvmOverloads constructor(
             d.draw(canvas)
         }
 
-        // 右下角闭眼徽标：明确表达「内容已隐藏」
-        val br = dp(17f)
-        val bx = cx + plateR - dp(6f)
-        val by = cy + plateR - dp(6f)
-        canvas.drawCircle(bx, by, br, badgePaint)
-        drawClosedEye(canvas, bx, by, dp(6f))
-    }
-
-    /** 一只闭合的眼睛 + 一道斜杠，纯 Path 绘制，不依赖图标字体 */
-    private fun drawClosedEye(canvas: Canvas, cx: Float, cy: Float, halfW: Float) {
-        eyePath.reset()
-        eyePath.moveTo(cx - halfW, cy - halfW * 0.15f)
-        eyePath.quadTo(cx, cy + halfW * 0.85f, cx + halfW, cy - halfW * 0.15f)
-        canvas.drawPath(eyePath, eyePaint)
-        canvas.drawLine(
-            cx - halfW * 0.8f, cy + halfW * 0.7f,
-            cx + halfW * 0.8f, cy - halfW * 0.7f,
-            eyePaint,
-        )
+        // 徽标贴在 96dp 底盘的右下角（和 v2.7.0 的位置一致）
+        MaskBadge.draw(canvas, cx + dp(31f), cy + dp(31f), dp(17f))
     }
 }

@@ -37,8 +37,10 @@ class MainActivity : FlutterFragmentActivity() {
     // 预取的应用图标：onPause 里现读 PackageManager 会拖慢遮罩上屏。
     private var appIconDrawable: Drawable? = null
 
-    // 常驻遮罩，平时 alpha = 0。见下方 showMask 的注释：
-    // 临时 addView 的渲染链太长，赶不上系统的最近任务抓图。
+    // 遮罩的两个实现，同时挂上：
+    //   maskSurface —— 主路径，SurfaceView 能同步提交 buffer，绕开 UI 渲染管线；
+    //   maskView    —— 兜底，万一某些 ROM 上 Surface 不进快照，还有普通 View 那一帧。
+    private var maskSurface: PrivacyMaskSurfaceView? = null
     private var maskView: PrivacyMaskView? = null
 
     // 最近一张「当前画面」的缩小模糊图。模糊之后新旧几乎看不出差别，
@@ -51,52 +53,76 @@ class MainActivity : FlutterFragmentActivity() {
     // onResume 后补抓快照的延时任务，重复 onResume 时先撤掉旧的，避免堆积。
     private val snapshotTask = Runnable { refreshSnapshot() }
 
-    /** 首次进入前台时把遮罩挂上，之后一直常驻，只切 alpha。 */
-    private fun attachMaskIfNeeded() {
-        if (maskView != null) return
+    /** 首次进入前台时把两层遮罩都挂上，之后一直常驻，只在进出后台时切换状态。 */
+    private fun attachMasksIfNeeded() {
         val root = findViewById<ViewGroup>(android.R.id.content) ?: return
-        val v = PrivacyMaskView(this)
-        v.bindIcon(appIconDrawable)
-        v.bindSnapshot(lastSnapshot)
-        v.alpha = 0f
-        v.isClickable = false
-        v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        try {
-            root.addView(
-                v,
-                ViewGroup.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                ),
-            )
-            maskView = v
-        } catch (_: Throwable) {
-            // 极端情况下（窗口已销毁）忽略，不能因为遮罩失败影响正常退到后台
+
+        if (maskView == null) {
+            val v = PrivacyMaskView(this)
+            v.bindIcon(appIconDrawable)
+            v.bindSnapshot(lastSnapshot)
+            v.alpha = 0f
+            v.isClickable = false
+            v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            try {
+                root.addView(
+                    v,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                maskView = v
+            } catch (_: Throwable) {
+                // 极端情况下（窗口已销毁）忽略，不能因为遮罩失败影响正常退到后台
+            }
+        }
+
+        if (maskSurface == null) {
+            val s = PrivacyMaskSurfaceView(this)
+            s.bindIcon(appIconDrawable)
+            s.bindSnapshot(lastSnapshot)
+            try {
+                root.addView(
+                    s,
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+                maskSurface = s
+            } catch (_: Throwable) {
+            }
         }
     }
 
     /**
-     * 亮遮罩。
+     * 亮遮罩。**这是整套方案唯一的关键动作，必须同步完成。**
      *
-     * 常驻 View 只改 alpha：少了 attach + measure + layout，只剩一次 draw，
-     * 再配合 [onUserLeaveHint] 提前调用，才能抢在系统抓最近任务快照之前上屏。
-     * 这里刻意不用动画 —— 动画要跑好几帧，正好错过抓图窗口。
+     * 主路径交给 SurfaceView：`lockCanvas` → 画 → `unlockCanvasAndPost`
+     * 同步把 buffer 提交给 SurfaceFlinger，不等 vsync、不走 measure/layout/draw，
+     * 所以系统抓最近任务快照时一定已经能看到它。
+     * 普通 View 那条只是兜底，它的 alpha 切换仍然要等一帧 —— 不可靠，但不能删。
      */
     private fun showMask() {
         if (!privacyEnabled) return
         if (isFinishing || isDestroyed) return
-        var v = maskView
-        if (v == null) {
-            // 还没挂过（理论上不会发生，onResume 已确保挂载），补救一次
-            attachMaskIfNeeded()
-            v = maskView
+
+        if (maskSurface == null || maskView == null) attachMasksIfNeeded()
+
+        // 主路径
+        maskSurface?.showMask()
+
+        // 兜底路径
+        val v = maskView
+        if (v != null) {
+            v.isClickable = true
+            v.alpha = 1f
         }
-        val view = v ?: return
-        view.isClickable = true
-        view.alpha = 1f
     }
 
     private fun hideMask() {
+        maskSurface?.hideMask()
         val v = maskView ?: return
         v.alpha = 0f
         v.isClickable = false
@@ -139,6 +165,7 @@ class MainActivity : FlutterFragmentActivity() {
                         val old = lastSnapshot
                         lastSnapshot = bmp
                         maskView?.bindSnapshot(bmp)
+                        maskSurface?.bindSnapshot(bmp)
                         old?.takeIf { it !== bmp }?.recycle()
                     } else {
                         bmp.recycle()
@@ -161,6 +188,8 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     private fun findSurface(v: View): SurfaceView? {
+        // 必须跳过自己的遮罩层，否则 PixelCopy 抓到的是一张全透明的遮罩
+        if (v is PrivacyMaskSurfaceView) return null
         if (v is SurfaceView && v.visibility == View.VISIBLE) return v
         if (v is ViewGroup) {
             for (i in 0 until v.childCount) {
@@ -172,9 +201,12 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     /**
-     * 用户主动离开 App（按 Home、从最近任务切走、启动别的应用）时先回调这里，
-     * 比 onPause 早 50~100ms —— 这一段时间就是留给遮罩上屏的。
-     * 这是整套方案能不能「稳定生效」的关键。
+     * 用户主动离开 App（按 Home、上滑回桌面、从最近任务切走、启动别的应用）时先回调这里。
+     *
+     * 注意它**并不比 onPause 早**：两者是同一个 binder 消息（handlePauseActivity）
+     * 里前后脚调用的，中间主线程不返回消息队列，一次 vsync 都等不到。
+     * 留在这里的价值只是把 Surface 的 buffer 提交再往前挪一点点 ——
+     * 真正让遮罩稳定生效的是 [PrivacyMaskSurfaceView] 的同步 post，不是这个时机。
      */
     override fun onUserLeaveHint() {
         if (!isFinishing) {
@@ -194,7 +226,7 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onResume() {
         super.onResume()
-        attachMaskIfNeeded()
+        attachMasksIfNeeded()
         hideMask()
         // 空闲后补一张新快照，供下一次离开时使用。800ms 是为了让首帧和
         // 页面动画都停下来，免得抓到一张过渡中的画面。
@@ -207,6 +239,7 @@ class MainActivity : FlutterFragmentActivity() {
         window?.decorView?.removeCallbacks(snapshotTask)
         lastSnapshot?.recycle()
         lastSnapshot = null
+        maskSurface = null
         maskView = null
         super.onDestroy()
     }
