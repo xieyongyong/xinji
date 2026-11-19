@@ -160,7 +160,10 @@ class LockService extends ChangeNotifier {
         localizedReason: '验证身份以查看工资数据',
         options: const AuthenticationOptions(
           biometricOnly: false, // 允许回退到系统密码
-          stickyAuth: true,
+          // stickyAuth 关闭：切后台/来电打断验证后，系统会在回前台时自动重弹，
+          // 和 LockPage 自己的一次弹框叠加，表现为「指纹框一直弹个不停」。
+          // 关掉后被打断就当作本次取消，用户回锁屏页手动点指纹即可。
+          stickyAuth: false,
           useErrorDialogs: true,
         ),
       );

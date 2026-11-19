@@ -145,28 +145,33 @@ class _ThemedApp extends StatelessWidget {
       darkTheme: buildTheme(brightness: Brightness.dark, seedIndex: seedIndex),
       themeMode: themeMode,
       // 全局浮层：下载进度条/安装提示贴在所有页面底部，切到统计/设置/详情都不消失。
+      //
+      // 关键：这里每个浮层都带 ValueKey。Stack 按 children 顺序做 diff，
+      // 若用无 key 的 children，showMask / locked 条件插入或移除时，
+      // 后面的 _LockOverlay 会被错位复用 → LockPage.initState 重跑 → 指纹框反复弹。
+      // 加 key 后 Flutter 按 key 匹配，条件变更不会误重建锁层。
       builder: (context, child) => Stack(
         children: [
           child ?? const SizedBox.shrink(),
           const Positioned(
+            key: ValueKey('update-strip'),
             left: 0,
             right: 0,
             bottom: 0,
             child: UpdateProgressStrip(),
           ),
           // 应用内悬浮锁定按钮（可拖动、吸附两侧），设置里可开关
-          FloatingLockButton(rootNavigatorKey: rootNavigatorKey),
+          FloatingLockButton(key: const ValueKey('floating-lock'), rootNavigatorKey: rootNavigatorKey),
           // 最后画：遮罩必须盖住包括下载进度条在内的一切
-          if (showMask) const Positioned.fill(child: _PrivacyMask()),
+          if (showMask) const Positioned.fill(key: ValueKey('privacy-mask'), child: _PrivacyMask()),
           // 全局锁层：放在 Navigator 之上，锁定时设置页等任何已打开页面都过不了验证。
           // ModalBarrier 兜住背景点击，LockPage 自己处理按键与指纹。
           if (locked) ...[
             const Positioned.fill(
+              key: ValueKey('lock-barrier'),
               child: ModalBarrier(dismissible: false, color: Colors.transparent),
             ),
-            Positioned.fill(
-              child: _LockOverlay(),
-            ),
+            const Positioned.fill(key: ValueKey('lock-overlay'), child: _LockOverlay()),
           ],
         ],
       ),

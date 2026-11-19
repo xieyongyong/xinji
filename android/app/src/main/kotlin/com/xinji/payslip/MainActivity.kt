@@ -3,7 +3,6 @@ package com.xinji.payslip
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
-import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -47,20 +46,6 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
-    /**
-     * Android 13+ 专门给「最近任务」用的开关。
-     *
-     * 只靠 onPause 里加 FLAG_SECURE 会和 Flutter 遮罩帧抢截图时机：
-     * 有时拍到遮罩，有时系统直接给空白卡片（上黑线、下纯白）。
-     * 这里在窗口创建/设置变更时就明确告诉系统：开启后台隐藏时根本不要拍最近任务预览，
-     * 从源头消除竞态；FLAG_SECURE 继续负责截屏/录屏/投屏这些其它路径。
-     */
-    private fun applyRecentsScreenshotPolicy() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            setRecentsScreenshotEnabled(!privacyEnabled)
-        }
-    }
-
     override fun onPause() {
         foreground = false
         applyPrivacyFlag()
@@ -75,8 +60,6 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 默认隐私开关是开的：窗口一创建就禁掉最近任务截图，别等 onPause 才处理。
-        applyRecentsScreenshotPolicy()
         // 主进程启动时记一笔「上次是谁怎么死的」，设置页的诊断日志会读到它。
         // native 崩溃抓不到 Dart 异常，只有系统这份记录能说清原因。
         ExitReasons.capture(applicationContext)
@@ -121,7 +104,6 @@ class MainActivity : FlutterFragmentActivity() {
                 "setEnabled" -> {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
                     applyPrivacyFlag()
-                    applyRecentsScreenshotPolicy()
                     result.success(true)
                 }
                 // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo（闭眼态）。

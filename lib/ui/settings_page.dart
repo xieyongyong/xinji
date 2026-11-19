@@ -522,8 +522,8 @@ class _SettingsPageState extends State<SettingsPage> {
                       const InfoHint(
                         size: 13,
                         title: '后台隐藏内容',
-                        text: '切到后台时盖住整屏/禁止最近任务预览，看不到工资明细；'
-                            'Android 13+ 最近任务显示空白卡片，旧系统显示模糊画面。回到应用自动恢复。',
+                        text: '切到后台时盖住整屏高斯模糊遮罩（应用图标 + 闭眼），看不到工资明细；'
+                            '最近任务里显示模糊画面，回前台自动恢复。',
                       ),
                     ],
                   ),

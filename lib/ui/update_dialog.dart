@@ -52,7 +52,9 @@ Future<bool> showUpdateDialog(
               children: [
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(dialogCtx).size.height * 0.42,
+                    // 从 0.42 降到 0.32：留出足够空间给下面的线路区和 actions，
+                    // 否则小屏机上 content 被挤压，线路说明会和「关闭/浏览器下载」重叠。
+                    maxHeight: MediaQuery.of(dialogCtx).size.height * 0.32,
                   ),
                   child: Scrollbar(
                     controller: scrollCtrl,
@@ -94,10 +96,10 @@ Future<bool> showUpdateDialog(
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
                 // 线路选择：固定在滚动区下方，StatefulBuilder 只重建这一小块
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
                     color: kSurfaceAlt,
                     borderRadius: BorderRadius.circular(10),
@@ -113,10 +115,10 @@ Future<bool> showUpdateDialog(
                               style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
                         ],
                       ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       Wrap(
                         spacing: 8,
-                        runSpacing: 4,
+                        runSpacing: 2,
                         children: [
                           for (final l in UpdateChecker.lines)
                             ChoiceChip(
@@ -138,11 +140,14 @@ Future<bool> showUpdateDialog(
                             ),
                         ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 2),
+                      // 说明压成一行：原来三行长说明把线路区撑高，正是它和底部按钮重叠的根源。
+                      // 第三方代理的风险提示移到 README，弹框这里只留一句短的。
                       Text(
-                        '默认 gh-proxy.com 加速；选「官方直链」则直接从 GitHub 下载。'
-                        '第三方代理能看到你的下载请求，介意的话请选官方直链。',
-                        style: TextStyle(fontSize: 10.5, height: 1.5, color: kTextHint),
+                        '默认 gh-proxy.com，失败自动换线；介意代理可选官方直链。',
+                        style: TextStyle(fontSize: 10, color: kTextHint),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ],
                   ),

@@ -31,6 +31,8 @@ class _LockPageState extends State<LockPage> {
   bool _bioAvailable = true;
   bool _busy = false;
   bool _bioPrompted = false;
+  /// 指纹验证进行中：防止首帧自动弹和手动点击叠加，或快速连点开多个验证框。
+  bool _bioInFlight = false;
 
   @override
   void initState() {
@@ -43,7 +45,9 @@ class _LockPageState extends State<LockPage> {
     final available = await lock.canUseBiometric();
     if (!mounted) return;
     setState(() => _bioAvailable = available);
-    // 有指纹就优先弹，日常几乎不用输 PIN
+    // 有指纹就优先弹一次，日常几乎不用输 PIN。
+    // _bioPrompted 保证这个 State 生命周期内只在首帧自动弹一次；
+    // 失败/取消后不再自动重弹，交给用户手动点指纹按钮，避免「一直弹」。
     if (available && !_bioPrompted) {
       _bioPrompted = true;
       _tryBiometric();
@@ -51,11 +55,17 @@ class _LockPageState extends State<LockPage> {
   }
 
   Future<void> _tryBiometric() async {
+    if (_bioInFlight) return; // 已经在验证，忽略重复触发
     final lock = context.read<LockService>();
-    final ok = await lock.authenticateBiometric();
-    if (!mounted) return;
-    if (ok) {
-      lock.unlock();
+    _bioInFlight = true;
+    try {
+      final ok = await lock.authenticateBiometric();
+      if (!mounted) return;
+      if (ok) {
+        lock.unlock();
+      }
+    } finally {
+      _bioInFlight = false;
     }
   }
 
