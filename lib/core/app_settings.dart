@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ui/theme.dart';
 import 'money.dart';
+import 'privacy_channel.dart';
 
 /// 全局用户偏好。
 ///
@@ -183,8 +184,8 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kPrivacyMask, v);
-    // 遮罩完全由 Flutter 绘制（见 main.dart 的 _PrivacyMask），
-    // 不再需要像原生推 FLAG_SECURE 那样同步开关。
+    // 实时同步给原生：遮罩是原生 View，靠这个开关决定 onPause 时要不要挂。
+    await PrivacyChannel.setEnabled(v);
   }
 
   Future<void> setFloatingLock(bool v) async {

@@ -554,21 +554,25 @@ class _ReviewPageState extends State<ReviewPage> {
     );
     if (result == null || !mounted) return;
 
-    // 转成信息项：从明细里摘掉，挪到信息项列表（保留原来的数字，只是不参与计算）
+    // 勾了「这是信息项」：从明细里摘掉，挪到信息项列表（不参与计算）。
+    // 用 result.draft（弹框里编辑后的值），而不是原来的 draft —— 旧版点按钮会丢编辑内容。
     if (result.asInfo) {
+      final src = result.draft ?? draft;
+      final infoValue = result.infoValue ??
+          (draft.valueType == kValueCoefficient
+              ? (draft.coefficient == null ? '' : draft.coefficient!.toStringAsFixed(2))
+              : (draft.amountCents / 100).toStringAsFixed(2));
       setState(() {
         _items.removeAt(index);
         _infos.add(PayInfo(
-          name: draft.name,
-          value: draft.valueType == kValueCoefficient
-              ? (draft.coefficient == null ? '' : draft.coefficient!.toStringAsFixed(2))
-              : (draft.amountCents / 100).toStringAsFixed(2),
+          name: src.name,
+          value: infoValue,
           sortOrder: _infos.length,
         ));
         _normalizeOrder();
         _applyPerfFormula();
       });
-      if (result.remember) await _rememberCategory(draft.name, kFieldInfo);
+      if (result.remember) await _rememberCategory(src.name, kFieldInfo);
       return;
     }
 
@@ -633,12 +637,33 @@ class _ReviewPageState extends State<ReviewPage> {
       ),
     );
     if (result?.draft == null || !mounted) return;
+    final r = result!;
+    final draft = r.draft!;
+
+    // 新增时也能勾「这是信息项」：直接进信息项列表，不进明细
+    if (r.asInfo) {
+      setState(() {
+        _infos.add(PayInfo(
+          name: draft.name,
+          value: r.infoValue ?? '',
+          sortOrder: _infos.length,
+        ));
+        _normalizeOrder();
+      });
+      if (r.remember) await _rememberCategory(draft.name, kFieldInfo);
+      return;
+    }
+
     setState(() {
-      _items.add(result!.draft!);
+      _items.add(draft);
       // 新增后立刻归位：模板里有这一项就插到它的位置，没有就落在同类末尾
       _normalizeOrder();
       _applyPerfFormula();
     });
+    // 新增时勾了「记住此项归类」也要生效（旧版这里漏了，勾了等于白勾）
+    if (r.remember && draft.name.trim().isNotEmpty) {
+      await _rememberCategory(draft.name, draft.category);
+    }
   }
 
   // ------------------------------------------------------------ 信息项操作
@@ -1623,13 +1648,20 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text(widget.isNew ? '添加信息项' : '编辑信息项'),
+      title: Text(
+        widget.isNew ? '添加信息项' : '编辑信息项',
+        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+      // scrollable：小屏 + 键盘弹起时内部滚动，不会顶出屏幕
+      scrollable: true,
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           TextField(
             controller: _nameCtrl,
             autofocus: widget.isNew,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
             decoration: const InputDecoration(
               labelText: '名称',
               hintText: '如：姓名 / 工号 / 应出勤天数',
@@ -1637,9 +1669,10 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
               isDense: true,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           TextField(
             controller: _valueCtrl,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
             decoration: const InputDecoration(
               labelText: '内容',
               hintText: '如：张三 / A1234 / 21',
@@ -1651,7 +1684,7 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
           Align(
             alignment: Alignment.centerLeft,
             child: Text('信息项只做记录，不会计入任何合计',
-                style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                style: TextStyle(fontSize: 11.8, color: kTextHint)),
           ),
         ],
       ),
@@ -1666,16 +1699,20 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
 class _ItemEditResult {
   final PayItemDraft? draft;
 
-  /// 这一行本来就不是钱（如「休息日加班时长」被认成了收入），要挪去信息项
+  /// 勾了「这是信息项」：确定后从明细挪到信息项列表
   final bool asInfo;
 
   /// 把这次的归类写进项目模板，下次识别自动照办
   final bool remember;
 
+  /// 信息项的值是文本而不是金额，这里存输入框里的原文
+  final String? infoValue;
+
   _ItemEditResult({
     this.draft,
     this.asInfo = false,
     this.remember = false,
+    this.infoValue,
   });
 }
 
@@ -1696,10 +1733,24 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
   late String _category;
   late String _valueType;
 
-  /// 「记住这个项目的归类」：默认勾上，但只对已有项目显示
+  /// 勾上就当成信息项：不计入合计，确定后这条会从明细挪到信息项列表。
+  /// 比起原来那个「点一下立刻关弹框」的按钮，勾选不会误触，也不会丢编辑内容。
+  bool _asInfo = false;
+
+  /// 「记住此项归类」：默认勾上。新增和编辑都显示 —— 手动加的项目也该被记住。
   bool _remember = true;
 
   bool get _isCoefficient => _valueType == kValueCoefficient;
+
+  /// 分段按钮统一样式：紧凑 + 13sp。字号比原来写死的 12 大一档，
+  /// 和输入框内容（15sp）拉开层级又不至于像附属标签。
+  static const ButtonStyle _segStyle = ButtonStyle(
+    visualDensity: VisualDensity.compact,
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    textStyle: WidgetStatePropertyAll<TextStyle?>(
+      TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+    ),
+  );
 
   @override
   void initState() {
@@ -1730,6 +1781,19 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
     if (name.isEmpty) return;
 
     final raw = _valueCtrl.text.trim();
+
+    // 勾了信息项：值是文本，原样带走，不做任何金额解析。
+    // 用户在这个框里改过的名称和内容都会保留（旧版点按钮会丢掉编辑内容）。
+    if (_asInfo) {
+      Navigator.of(context).pop(_ItemEditResult(
+        draft: PayItemDraft(name: name, category: _category),
+        asInfo: true,
+        remember: _remember,
+        infoValue: raw,
+      ));
+      return;
+    }
+
     int amountCents = 0;
     double? coefficient;
 
@@ -1753,130 +1817,118 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // 信息项只有「名称 + 内容」，没有金额概念：勾上后输入框切成纯文本
+    final valueLabel = _asInfo ? '内容' : (_isCoefficient ? '系数' : '金额');
+    final valueHint = _asInfo ? '如：21 / A1234' : (_isCoefficient ? '1.20' : '0.00');
+
     return AlertDialog(
-      title: Text(widget.isNew ? '添加项目' : '编辑项目'),
-      // 固定高度 + 内部滚动：点「推算」时只在内部增减一行，
-      // 弹窗本身不会突然撑高；小屏/键盘弹起也不会超出屏幕。
-      content: SizedBox(
-        height: (MediaQuery.of(context).size.height * 0.56)
-            .clamp(320.0, 440.0)
-            .toDouble(),
+      title: Text(
+        widget.isNew ? '添加项目' : '编辑项目',
+        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+      ),
+      contentPadding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+      // 不再写死高度：内容短时弹框自然矮，编辑态内容多时才到上限并在内部滚动。
+      // 点「推算」也不会撑高 —— 说明挪进了输入框右侧的 ⓘ，不占布局高度。
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.62,
+        ),
         child: SingleChildScrollView(
           child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-            controller: _nameCtrl,
-            autofocus: widget.isNew,
-            decoration: const InputDecoration(
-              labelText: '项目名称',
-              hintText: '如：基本工资 / 个人社保',
-              border: OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: SegmentedButton<String>(
-                  style: const ButtonStyle(
-                    visualDensity: VisualDensity.compact,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  segments: const [
-                    ButtonSegment(
-                        value: kCategoryIncome, label: Text('收入', style: TextStyle(fontSize: 12))),
-                    ButtonSegment(
-                        value: kCategoryDeduction,
-                        label: Text('扣款', style: TextStyle(fontSize: 12))),
-                  ],
-                  selected: {_category},
-                  onSelectionChanged: (s) => setState(() => _category = s.first),
+              TextField(
+                controller: _nameCtrl,
+                autofocus: widget.isNew,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                decoration: const InputDecoration(
+                  labelText: '项目名称',
+                  hintText: '如：基本工资 / 个人社保',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 12),
+              // 两行分段按钮都用 expandedInsets 撑满，左右边缘对齐
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                expandedInsets: EdgeInsets.zero,
+                style: _segStyle,
+                segments: const [
+                  ButtonSegment(value: kCategoryIncome, label: Text('收入')),
+                  ButtonSegment(value: kCategoryDeduction, label: Text('扣款')),
+                ],
+                selected: {_category},
+                onSelectionChanged:
+                    _asInfo ? null : (s) => setState(() => _category = s.first),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<String>(
+                showSelectedIcon: false,
+                expandedInsets: EdgeInsets.zero,
+                style: _segStyle,
+                segments: const [
+                  ButtonSegment(value: kValueAmount, label: Text('金额')),
+                  ButtonSegment(value: kValueCoefficient, label: Text('系数')),
+                  ButtonSegment(value: kValueDerived, label: Text('推算')),
+                ],
+                selected: {_valueType},
+                onSelectionChanged:
+                    _asInfo ? null : (s) => setState(() => _valueType = s.first),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _valueCtrl,
+                keyboardType: _asInfo
+                    ? TextInputType.text
+                    : const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: _asInfo
+                    ? null
+                    : [FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]'))],
+                decoration: InputDecoration(
+                  labelText: valueLabel,
+                  hintText: valueHint,
+                  border: const OutlineInputBorder(),
+                  isDense: true,
+                  // 推算说明收进 suffixIcon：原来铺在下面，选中「推算」时会撑高弹窗
+                  suffixIcon: (!_asInfo && _valueType == kValueDerived)
+                      ? const InfoHint(
+                          title: '推算值',
+                          text: '由公式反推得到，能看到但不计入合计。\n'
+                              '例如「基本绩效 = 绩效工资 ÷ 绩效系数」。',
+                          size: 18,
+                        )
+                      : null,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Divider(height: 16, thickness: 0.8, color: kDivider),
+              CheckboxListTile(
+                value: _asInfo,
+                onChanged: (v) => setState(() => _asInfo = v ?? false),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('这是信息项（不计入合计）',
+                    style: TextStyle(fontSize: 12.5)),
+              ),
+              CheckboxListTile(
+                value: _remember,
+                onChanged: (v) => setState(() => _remember = v ?? false),
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('记住此项归类',
+                    style: TextStyle(fontSize: 12.5)),
+                secondary: const InfoHint(
+                  title: '记住此项归类',
+                  text: '下次识别到同名项目，自动按这次的规则处理'
+                      '（收入 / 扣款 / 信息项），不用每次手动改。',
+                  size: 15,
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 10),
-          SegmentedButton<String>(
-            showSelectedIcon: false,
-            style: const ButtonStyle(
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            ),
-            segments: const [
-              ButtonSegment(
-                  value: kValueAmount, label: Text('金额', style: TextStyle(fontSize: 12))),
-              ButtonSegment(
-                  value: kValueCoefficient,
-                  label: Text('系数', style: TextStyle(fontSize: 12))),
-              ButtonSegment(
-                  value: kValueDerived,
-                  label: Text('推算', style: TextStyle(fontSize: 12))),
-            ],
-            selected: {_valueType},
-            onSelectionChanged: (s) => setState(() => _valueType = s.first),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _valueCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[0-9.\-]')),
-            ],
-            decoration: InputDecoration(
-              labelText: _isCoefficient ? '系数' : '金额',
-              hintText: _isCoefficient ? '1.20' : '0.00',
-              border: const OutlineInputBorder(),
-              isDense: true,
-            ),
-          ),
-          if (_valueType == kValueDerived) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                const InfoHint(
-                  title: '推算值',
-                  text: '由公式反推得到，能看到但不计入合计。\n'
-                      '例如「基本绩效 = 绩效工资 ÷ 绩效系数」。',
-                ),
-                Text('推算值说明', style: TextStyle(fontSize: 11, color: kTextHint)),
-              ],
-            ),
-          ],
-          if (!widget.isNew) ...[
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                style: TextButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  visualDensity: VisualDensity.compact,
-                ),
-                onPressed: () => Navigator.of(context).pop(
-                  _ItemEditResult(asInfo: true, remember: _remember),
-                ),
-                icon: const Icon(Icons.swap_horiz, size: 15),
-                label: const Text(
-                  '这不是钱，转成信息项',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
-            ),
-            CheckboxListTile(
-              value: _remember,
-              onChanged: (v) => setState(() => _remember = v ?? false),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              controlAffinity: ListTileControlAffinity.leading,
-              title: const Text('记住这个项目的归类', style: TextStyle(fontSize: 12.5)),
-              subtitle: Text(
-                '下次识别到同名项目，自动按这次的规则处理（收入/扣款/信息项）',
-                style: TextStyle(fontSize: 11, height: 1.4, color: kTextHint),
-              ),
-            ),
-          ],
-          ],
           ),
         ),
       ),
