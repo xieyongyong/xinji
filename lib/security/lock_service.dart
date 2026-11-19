@@ -26,6 +26,13 @@ class LockService extends ChangeNotifier {
   /// 内存里的锁状态。冷启动、以及后台超过设定时长都会置为 true
   bool locked = false;
 
+  /// 后台隐私遮罩是否可见。
+  ///
+  /// 由 `main.dart` 的 lifecycle 驱动：`inactive` / `paused` 置 true，
+  /// `resumed` 置 false。之所以放在 Service 里而不是页面内，
+  /// 是因为遮罩挂在 `MaterialApp.builder` 的最外层，要盖住所有页面。
+  bool masked = false;
+
   bool _enabled = false;
   String? _pinHash;
   String? _pinSalt;
@@ -177,6 +184,22 @@ class LockService extends ChangeNotifier {
   void lockNow() {
     if (!_enabled) return;
     locked = true;
+    notifyListeners();
+  }
+
+  // ------------------------------------------------------------ 后台遮罩
+
+  /// 盖上后台隐私遮罩。幂等，lifecycle 里可以放心重复调用。
+  void mask() {
+    if (masked) return;
+    masked = true;
+    notifyListeners();
+  }
+
+  /// 撤掉遮罩。回到前台时调用（该上锁时 `_RootGate` / 锁层会挡）。
+  void unmask() {
+    if (!masked) return;
+    masked = false;
     notifyListeners();
   }
 

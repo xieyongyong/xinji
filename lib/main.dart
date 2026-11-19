@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -31,10 +33,13 @@ Future<void> main() async {
   await lock.load();
   await appState.init();
 
-  // 后台隐私保护：真正的保障是原生的 FLAG_SECURE（切后台给窗口加、回前台清），
-  // 系统抓图时直接出黑帧，不依赖 App 渲染任何一帧。
-  // Flutter 这层不需要画遮罩，只负责把开关值同步过去。
+  // 后台隐私保护分两层：
+  //   可见层 —— Flutter 毛玻璃遮罩（见下方 _PrivacyMask），inactive 时画上；
+  //   兜底层 —— 原生 FLAG_SECURE，onPause 加、onResume 清。
+  // 启动时把用户设置推一次，之后设置页变更时也会实时同步（见 AppSettings.setPrivacyMask）。
   await PrivacyChannel.setEnabled(settings.privacyMask);
+  // 预取应用图标：后台遮罩中央要用，进后台后才能直接用缓存绘制。
+  await PrivacyChannel.preloadAppIcon();
 
   runApp(XinJiApp(state: appState, lock: lock, settings: settings));
 }
@@ -74,13 +79,16 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     switch (state) {
       case AppLifecycleState.inactive:
-        // 后台遮罩已交给原生（MainActivity.onPause 里同步挂 PrivacyMaskView），
-        // 这里不需要再驱动任何绘制 —— 正是为了绕开「Dart 这帧来不及画」的问题。
+        // inactive 比 paused 早一步，此时窗口仍可见、Flutter engine 仍在渲染。
+        // 必须在这里就盖遮罩，系统拍「最近任务」缩略图时才能拍到遮罩；
+        // 一旦拖到 paused，engine 已停止出帧，遮罩要等到回前台才画 → 就会「闪一下」。
+        if (widget.settings.privacyMask) widget.lock.mask();
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
-        // 记下时间点供回前台判断是否重锁。遮罩由原生负责，这里不再重复处理。
+        // 真正切后台：记下时间点供回前台判断重锁，并补一次遮罩（幂等）。
         _pausedAt ??= DateTime.now();
+        if (widget.settings.privacyMask) widget.lock.mask();
         break;
       case AppLifecycleState.resumed:
         final paused = _pausedAt;
@@ -91,6 +99,9 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
             widget.lock.lockNow();
           }
         }
+        // 回到前台立刻撤遮罩（该上锁时锁层会挡）。
+        // 遮罩在 inactive 就画好了，这里是正常的内容过渡，不会「回前台才画再撤」的闪。
+        widget.lock.unmask();
         // 回到前台顺手补一次「这个月该备份了」的检查（内部有互斥和退避）
         CloudAutoBackup.runIfDue(widget.settings);
         break;
@@ -123,6 +134,10 @@ class _ThemedApp extends StatelessWidget {
     final seedIndex = context.select<AppSettings, int>((s) => s.seedIndex);
     final themeMode = context.select<AppSettings, ThemeMode>((s) => s.materialThemeMode);
     final locked = context.select<LockService, bool>((l) => l.enabled && l.locked);
+    // 遮罩只在「切到后台」时出现；回到前台立刻撤掉（该上锁时锁层会挡）
+    final masked = context.select<LockService, bool>((l) => l.masked);
+    final privacyMask = context.select<AppSettings, bool>((s) => s.privacyMask);
+    final showMask = masked && privacyMask;
     return MaterialApp(
       title: '薪迹',
       debugShowCheckedModeBanner: false,
@@ -137,8 +152,8 @@ class _ThemedApp extends StatelessWidget {
       // 后面的 _LockOverlay 会被错位复用 → LockPage.initState 重跑 → 指纹框反复弹。
       // 加 key 后 Flutter 按 key 匹配，条件变更不会误重建锁层。
       //
-      // 后台隐私遮罩不在这里：它由原生 PrivacyMaskView 在 onPause 同步挂载，
-      // Flutter 这一层根本来不及画（详见 PrivacyMaskView.kt 的注释）。
+      // 后台隐私遮罩：`inactive` 时画上、`resumed` 撤掉。
+      // 它必须是 Stack 的最后一个孩子 —— 要盖住包含下载进度条、悬浮按钮在内的一切。
       builder: (context, child) => Stack(
         children: [
           child ?? const SizedBox.shrink(),
@@ -160,9 +175,75 @@ class _ThemedApp extends StatelessWidget {
             ),
             const Positioned.fill(key: ValueKey('lock-overlay'), child: _LockOverlay()),
           ],
+          // 最后画：后台遮罩必须盖住上面所有层
+          if (showMask)
+            const Positioned.fill(key: ValueKey('privacy-mask'), child: _PrivacyMask()),
         ],
       ),
       home: const HomePage(),
+    );
+  }
+}
+
+/// 切后台时盖住整屏的毛玻璃遮罩。
+///
+/// 目的：系统「最近任务」里拍到的缩略图是这一屏，而不是工资明细。
+/// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
+/// 原生 `FLAG_SECURE` 另外做系统级兜底，两者互补。
+class _PrivacyMask extends StatelessWidget {
+  const _PrivacyMask();
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = PrivacyChannel.appIconBytes;
+    // 毛玻璃：模糊底下这一帧的真实内容，不铺纯白/不透明底，也不放任何文字。
+    // 中央只放应用图标 + 右下角一个闭眼徽标。
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          // 一层很淡的半透明蒙版，压一压底图、让图标更清楚，但不是纯白
+          color: Colors.black.withValues(alpha: 0.28),
+          alignment: Alignment.center,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.14),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.2),
+                ),
+                alignment: Alignment.center,
+                child: bytes != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.memory(bytes, width: 62, height: 62, fit: BoxFit.contain),
+                      )
+                    : Icon(Icons.visibility_off_outlined, size: 46, color: Colors.white),
+              ),
+              // 右下角闭眼徽标：明确表达「内容已隐藏」
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: kSeed,
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Icon(Icons.visibility_off, size: 19, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -184,7 +184,7 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kPrivacyMask, v);
-    // 实时同步给原生：遮罩是原生 View，靠这个开关决定 onPause 时要不要挂。
+    // 实时同步给原生：决定 onPause 时要加不加系统级兜底标记。
     await PrivacyChannel.setEnabled(v);
   }
 
