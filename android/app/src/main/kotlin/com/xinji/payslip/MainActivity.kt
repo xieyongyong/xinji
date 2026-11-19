@@ -28,8 +28,8 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         private const val PRIVACY_CHANNEL = "xinji/privacy"
 
-        /** 最近任务卡片的主色（系统不拍快照时显示的那张卡） */
-        private const val TASK_COLOR = 0xFF23262B.toInt()
+        /** 最近任务卡片的主色（系统不拍快照时显示的那张卡）。不能用 const：toInt() 不是常量表达式 */
+        private val TASK_COLOR = 0xFF23262B.toInt()
     }
 
     // 后台隐私保护是否开启（对应设置里的「后台隐藏内容」）。默认开，和 Dart 默认值一致。
