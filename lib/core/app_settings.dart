@@ -3,7 +3,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../ui/theme.dart';
 import 'money.dart';
-import 'privacy_channel.dart';
 
 /// 全局用户偏好。
 ///
@@ -21,6 +20,8 @@ class AppSettings extends ChangeNotifier {
   static const _kHideAmounts = 'hide_amounts';
   static const _kFloatingLock = 'floating_lock';
   static const _kFloatingLockSize = 'floating_lock_size';
+  // 贴边档位：0=贴边(1/2出屏) 1=微贴边(1/3) 2=不贴边(完整显示)
+  static const _kFloatingLockEdge = 'floating_lock_edge';
   static const _kCloudAuto = 'cloud_auto_backup';
   static const _kCloudAutoDay = 'cloud_auto_backup_day';
   static const _kCloudAutoLast = 'cloud_auto_backup_last_at';
@@ -68,6 +69,20 @@ class AppSettings extends ChangeNotifier {
 
   /// 悬浮按钮直径（dp）。档位 40~68，默认 52。
   int floatingLockSize = 52;
+
+  /// 悬浮按钮贴边档位：0=贴边(约1/2出屏) 1=微贴边(约1/3) 2=不贴边(完整在屏内)。默认 0。
+  /// 用户希望锁图标跟随底层一起被屏幕边缘裁掉一部分，比整图标露出更自然。
+  int floatingLockEdge = 0;
+
+  /// 贴边档位可选文案，设置弹框的分段控件直接用它。
+  static const floatingLockEdgeLabels = <int, String>{
+    0: '贴边',
+    1: '微贴',
+    2: '不贴',
+  };
+
+  /// 把任意整数夹到 0~2，避免老配置/手改配置越界。
+  static int normalizeFloatingLockEdge(int v) => v < 0 ? 0 : (v > 2 ? 2 : v);
 
   /// 把任意整数夹到 40~68 且对齐到 4 的倍数，避免老配置/手改配置越界。
   static int normalizeFloatingLockSize(int v) {
@@ -118,6 +133,7 @@ class AppSettings extends ChangeNotifier {
     kMaskAmounts = hideAmounts;
     floatingLock = sp.getBool(_kFloatingLock) ?? false;
     floatingLockSize = normalizeFloatingLockSize(sp.getInt(_kFloatingLockSize) ?? 52);
+    floatingLockEdge = normalizeFloatingLockEdge(sp.getInt(_kFloatingLockEdge) ?? 0);
     cloudAutoBackup = sp.getBool(_kCloudAuto) ?? false;
     cloudAutoBackupDay = normalizeBackupDay(sp.getInt(_kCloudAutoDay) ?? 1);
     cloudAutoBackupLastAt = sp.getInt(_kCloudAutoLast) ?? 0;
@@ -167,8 +183,8 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setBool(_kPrivacyMask, v);
-    // 实时同步给原生：开启则切后台加 FLAG_SECURE，关闭则不加。
-    await PrivacyChannel.setEnabled(v);
+    // 遮罩完全由 Flutter 绘制（见 main.dart 的 _PrivacyMask），
+    // 不再需要像原生推 FLAG_SECURE 那样同步开关。
   }
 
   Future<void> setFloatingLock(bool v) async {
@@ -183,6 +199,13 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
     final sp = await SharedPreferences.getInstance();
     await sp.setInt(_kFloatingLockSize, floatingLockSize);
+  }
+
+  Future<void> setFloatingLockEdge(int v) async {
+    floatingLockEdge = normalizeFloatingLockEdge(v);
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setInt(_kFloatingLockEdge, floatingLockEdge);
   }
 
   Future<void> setLockDelay(int seconds) async {

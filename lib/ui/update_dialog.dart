@@ -52,9 +52,9 @@ Future<bool> showUpdateDialog(
               children: [
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    // 从 0.42 降到 0.32：留出足够空间给下面的线路区和 actions，
-                    // 否则小屏机上 content 被挤压，线路说明会和「关闭/浏览器下载」重叠。
-                    maxHeight: MediaQuery.of(dialogCtx).size.height * 0.32,
+                    // 线路区改成一行下拉框后整体更紧凑，日志区可再看一点内容；
+                    // 但仍限高，避免小屏上把「立即更新」挤出屏幕。
+                    maxHeight: MediaQuery.of(dialogCtx).size.height * 0.28,
                   ),
                   child: Scrollbar(
                     controller: scrollCtrl,
@@ -96,58 +96,37 @@ Future<bool> showUpdateDialog(
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                // 线路选择：固定在滚动区下方，StatefulBuilder 只重建这一小块
+                const SizedBox(height: 8),
+                // 线路选择：收进下拉框，只显示当前选中项，不再平铺四条撑高弹窗。
+                // StatefulBuilder 只重建这一小块；改线路即时落盘，下次记住。
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
                   decoration: BoxDecoration(
                     color: kSurfaceAlt,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  child: Row(
                     children: [
-                      Row(
-                        children: [
-                          Icon(Icons.alt_route, size: 14, color: kTextSecondary),
-                          const SizedBox(width: 6),
-                          Text('下载线路（失败会自动换下一条）',
-                              style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 2,
-                        children: [
+                      Icon(Icons.alt_route, size: 15, color: kTextSecondary),
+                      const SizedBox(width: 8),
+                      Text('下载线路', style: TextStyle(fontSize: 12, color: kTextSecondary)),
+                      const Spacer(),
+                      DropdownButton<String>(
+                        value: lineId,
+                        isDense: true,
+                        underline: const SizedBox.shrink(),
+                        items: [
                           for (final l in UpdateChecker.lines)
-                            ChoiceChip(
-                              label: Text(l.label,
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      color: lineId == l.id
-                                          ? Colors.white
-                                          : kTextBody)),
-                              selected: lineId == l.id,
-                              selectedColor: kSeed,
-                              backgroundColor: kSurface,
-                              visualDensity: VisualDensity.compact,
-                              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              onSelected: (_) async {
-                                setDialogState(() => lineId = l.id);
-                                await UpdateChecker.setPreferredLine(l.id);
-                              },
+                            DropdownMenuItem<String>(
+                              value: l.id,
+                              child: Text(l.label, style: const TextStyle(fontSize: 12.5)),
                             ),
                         ],
-                      ),
-                      const SizedBox(height: 2),
-                      // 说明压成一行：原来三行长说明把线路区撑高，正是它和底部按钮重叠的根源。
-                      // 第三方代理的风险提示移到 README，弹框这里只留一句短的。
-                      Text(
-                        '默认 gh-proxy.com，失败自动换线；介意代理可选官方直链。',
-                        style: TextStyle(fontSize: 10, color: kTextHint),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        onChanged: (v) async {
+                          if (v == null || v == lineId) return;
+                          setDialogState(() => lineId = v);
+                          await UpdateChecker.setPreferredLine(v);
+                        },
                       ),
                     ],
                   ),
@@ -157,18 +136,39 @@ Future<bool> showUpdateDialog(
           );
         },
       ),
+      // 按钮分两行：主操作「立即更新」独占一行撑满，次操作「浏览器下载/关闭」
+      // 并排放在下一行。默认 actions 横排三按钮，窄屏上会挤到重叠、主次不分。
       actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'later'),
-          child: Text(auto ? '以后再说' : '关闭'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'browser'),
-          child: const Text('浏览器下载', style: TextStyle(fontSize: 12.5)),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, 'background'),
-          child: const Text('立即更新'),
+        SizedBox(
+          width: double.maxFinite,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, 'background'),
+                child: const Text('立即更新'),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx, 'browser'),
+                      child: const Text('浏览器下载', style: TextStyle(fontSize: 12.5)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(ctx, 'later'),
+                      child: Text(auto ? '以后再说' : '关闭',
+                          style: const TextStyle(fontSize: 12.5)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ],
     ),

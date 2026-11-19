@@ -490,24 +490,15 @@ class _SettingsPageState extends State<SettingsPage> {
                     onTap: () => _pickLockDelay(context, settings),
                   ),
                   const Divider(height: 1),
-                  SwitchListTile(
-                    value: settings.floatingLock,
-                    onChanged: (v) => settings.setFloatingLock(v),
-                    title: const Text('悬浮锁定按钮', style: TextStyle(fontSize: 14)),
-                    subtitle: Text('渐变透明的半透明按钮，可拖动、约 1/3 贴边，点一下立即锁定',
-                        style: TextStyle(fontSize: 11.5, color: kTextHint)),
-                    secondary: Icon(Icons.lock_clock, size: 20, color: kTextBody),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  _item(
+                    icon: Icons.lock_clock,
+                    title: '悬浮锁定按钮',
+                    subtitle: settings.floatingLock
+                        ? '已开启 · ${settings.floatingLockSize}dp · '
+                            '${AppSettings.floatingLockEdgeLabels[settings.floatingLockEdge] ?? '贴边'}（点这里配置）'
+                        : '渐变透明、可拖动的快捷锁屏按钮（点这里配置）',
+                    onTap: () => _pickFloatingLock(context, settings),
                   ),
-                  if (settings.floatingLock) ...[
-                    const Divider(height: 1),
-                    _item(
-                      icon: Icons.format_size,
-                      title: '悬浮按钮大小',
-                      subtitle: '当前 ${settings.floatingLockSize} dp（40–68，点这里微调）',
-                      onTap: () => _pickFloatingLockSize(context, settings),
-                    ),
-                  ],
                 ],
                 const Divider(height: 1),
                 SwitchListTile(
@@ -1055,46 +1046,86 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) setState(() {});
   }
 
-  /// 微调悬浮锁定按钮大小：40~68dp，每档 4dp，设置随备份一起走。
-  Future<void> _pickFloatingLockSize(BuildContext context, AppSettings settings) async {
-    var temp = settings.floatingLockSize.toDouble();
-    final picked = await showDialog<int>(
+  /// 悬浮锁定按钮统一配置：是否开启、大小、贴边档位。
+  /// 弹框里用临时值，点「确定」才一次性落盘，取消则不改。
+  Future<void> _pickFloatingLock(BuildContext context, AppSettings settings) async {
+    var tempEnabled = settings.floatingLock;
+    var tempSize = settings.floatingLockSize.toDouble();
+    var tempEdge = settings.floatingLockEdge;
+
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('悬浮按钮大小', style: TextStyle(fontSize: 15)),
+        title: const Text('悬浮锁定按钮', style: TextStyle(fontSize: 15)),
         content: StatefulBuilder(
           builder: (ctx, setDialogState) {
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Slider(
-                  value: temp,
-                  min: 40.0,
-                  max: 68.0,
-                  divisions: 7,
-                  label: '${temp.round()}',
-                  onChanged: (v) => setDialogState(() => temp = v),
-                ),
-                Text('当前 ${temp.round()} dp',
-                    style: TextStyle(fontSize: 12, color: kTextSecondary)),
-              ],
+            return SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    value: tempEnabled,
+                    onChanged: (v) => setDialogState(() => tempEnabled = v),
+                    title: const Text('启用悬浮锁定按钮', style: TextStyle(fontSize: 13.5)),
+                    subtitle: Text('渐变透明、可拖动，点一下立即上锁',
+                        style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                  const SizedBox(height: 8),
+                  Text('按钮大小：${tempSize.round()} dp',
+                      style: const TextStyle(fontSize: 12.5)),
+                  Slider(
+                    value: tempSize,
+                    min: 40.0,
+                    max: 68.0,
+                    divisions: 7,
+                    label: '${tempSize.round()}',
+                    onChanged: (v) => setDialogState(() => tempSize = v),
+                  ),
+                  const SizedBox(height: 4),
+                  Text('贴边方式', style: const TextStyle(fontSize: 12.5)),
+                  const SizedBox(height: 6),
+                  SegmentedButton<int>(
+                    segments: [
+                      for (final e in AppSettings.floatingLockEdgeLabels.entries)
+                        ButtonSegment<int>(
+                          value: e.key,
+                          label: Text(e.value, style: const TextStyle(fontSize: 11.5)),
+                        ),
+                    ],
+                    selected: {tempEdge},
+                    onSelectionChanged: (s) {
+                      if (s.isEmpty) return;
+                      setDialogState(() => tempEdge = s.first);
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '贴边=约一半露在屏外，锁图标跟着被裁一部分；微贴=约 1/3；不贴=完整显示在屏内。',
+                    style: TextStyle(fontSize: 10.5, color: kTextHint, height: 1.5),
+                  ),
+                ],
+              ),
             );
           },
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(ctx).pop(false),
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(temp.round()),
+            onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('确定'),
           ),
         ],
       ),
     );
-    if (picked == null) return;
-    await settings.setFloatingLockSize(picked);
+    if (ok != true) return;
+    await settings.setFloatingLock(tempEnabled);
+    await settings.setFloatingLockSize(tempSize.round());
+    await settings.setFloatingLockEdge(tempEdge);
     if (mounted) setState(() {});
   }
 

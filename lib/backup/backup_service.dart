@@ -65,6 +65,7 @@ class BackupService {
     'theme_mode',
     'lock_delay_seconds',
     'floating_lock_size',
+    'floating_lock_edge',
     'current_employer_id',
     'cloud_auto_backup_day',
     'cloud_auto_backup_last_at',

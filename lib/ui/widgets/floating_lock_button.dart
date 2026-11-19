@@ -8,8 +8,9 @@ import '../theme.dart';
 
 /// 应用内悬浮锁定按钮。
 ///
-/// 半透明渐变、无实线边框，可拖动；松手按中心点吸附到屏幕左右两侧，
-/// 默认让约 1/3 露在屏外，既好按又不挡内容。点一下立即上锁。
+/// 半透明渐变、无实线边框，可拖动；松手按中心点吸附到屏幕左右两侧。
+/// 贴边程度三档可调：贴边(约1/2出屏，图标跟着底层被裁一部分) / 微贴(1/3) / 不贴(完整)。
+/// 锁图标在圆底正中，不做额外偏移——贴边时跟随底层一起被屏幕边缘裁切更自然。
 /// 纯 Flutter 应用内浮层，退出 App 即消失，不需要系统悬浮窗权限。
 ///
 /// 只在「已启用应用锁」且设置里打开「悬浮锁定按钮」时显示。
@@ -59,14 +60,24 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
     });
   }
 
-  /// 吸附位置：约 1/3 在屏外，2/3 留在屏内；图标稍微往屏内偏，避免被切到。
-  double _snappedX(double width, double size, bool left) {
-    return left ? -size / 3 : width - size * 2 / 3;
+  /// 吸附位置按贴边档位算：
+  ///   edge=0 贴边  → 约 1/2 出屏（锁图标跟着被裁一部分）
+  ///   edge=1 微贴  → 约 1/3 出屏
+  ///   edge=2 不贴  → 完整留在屏内（左右各留 6dp）
+  double _snappedX(double width, double size, bool left, int edge) {
+    switch (edge) {
+      case 0:
+        return left ? -size / 2 : width - size / 2;
+      case 1:
+        return left ? -size / 3 : width - size * 2 / 3;
+      default:
+        return left ? 6 : width - size - 6;
+    }
   }
 
-  void _onPanEnd(double size, double width, double minY, double maxY) {
+  void _onPanEnd(double size, double width, double minY, double maxY, int edge) {
     if (!_dragging) return;
-    final centerX = (_dragX ?? _snappedX(width, size, _left)) + size / 2;
+    final centerX = (_dragX ?? _snappedX(width, size, _left, edge)) + size / 2;
     _left = centerX < width / 2;
     _y = (_y ?? 0).clamp(minY, maxY).toDouble();
     _dragging = false;
@@ -93,6 +104,7 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
   Widget build(BuildContext context) {
     final settings = context.select<AppSettings, bool>((s) => s.floatingLock);
     final sizeSetting = context.select<AppSettings, int>((s) => s.floatingLockSize);
+    final edge = context.select<AppSettings, int>((s) => s.floatingLockEdge);
     final enabled = context.select<LockService, bool>((l) => l.enabled);
     final locked = context.select<LockService, bool>((l) => l.locked);
     if (!settings || !enabled || locked) return const SizedBox.shrink();
@@ -101,9 +113,12 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
     final size = sizeSetting.toDouble();
     const minY = 40.0;
     final maxY = (media.height - size - 70).clamp(minY, media.height).toDouble();
-    final snappedX = _snappedX(media.width, size, _left);
+    final snappedX = _snappedX(media.width, size, _left, edge);
     final x = _dragging ? (_dragX ?? snappedX) : snappedX;
     final y = (_y ?? media.height * 0.45).clamp(minY, maxY).toDouble();
+    // 贴边档不同，拖动时允许到达的 x 范围也不同：贴边要能拖出屏幕一半。
+    final minDragX = edge == 2 ? 0.0 : -size / 2;
+    final maxDragX = edge == 2 ? media.width - size : media.width - size / 2;
 
     return Positioned(
       left: x,
@@ -118,12 +133,12 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
         onPanUpdate: (d) {
           setState(() {
             _dragX = ((_dragX ?? x) + d.delta.dx)
-                .clamp(-size * 0.45, media.width - size * 0.55)
+                .clamp(minDragX, maxDragX)
                 .toDouble();
             _y = ((_y ?? y) + d.delta.dy).clamp(minY, maxY).toDouble();
           });
         },
-        onPanEnd: (_) => _onPanEnd(size, media.width, minY, maxY),
+        onPanEnd: (_) => _onPanEnd(size, media.width, minY, maxY, edge),
         onTap: _lock,
         child: SizedBox(
           width: size,
@@ -150,14 +165,11 @@ class _FloatingLockButtonState extends State<FloatingLockButton> {
                 ),
               ],
             ),
-            child: Transform.translate(
-              // 图标朝屏幕内侧偏一点，1/3 贴边时也不会被切掉。
-              offset: Offset(_left ? 4 : -4, 0),
-              child: Icon(
-                Icons.lock_outline,
-                size: size * 0.46,
-                color: Colors.white.withOpacity(0.92),
-              ),
+            // 锁图标在圆底正中，不做偏移；贴边档会让整个底（含图标）一起被屏幕裁切。
+            child: Icon(
+              Icons.lock_outline,
+              size: size * 0.46,
+              color: Colors.white.withOpacity(0.92),
             ),
           ),
         ),

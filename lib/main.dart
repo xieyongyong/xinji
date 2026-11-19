@@ -33,9 +33,9 @@ Future<void> main() async {
   await lock.load();
   await appState.init();
 
-  // 后台隐私保护交给原生窗口标志位。启动时把用户设置推一次，
-  // 之后设置页变更时也会实时同步（见 AppSettings.setPrivacyMask）。
-  await PrivacyChannel.setEnabled(settings.privacyMask);
+  // 后台隐私保护完全由 Flutter 遮罩承担：在 inactive（窗口仍可见）时就盖好毛玻璃，
+  // 系统拍「最近任务」缩略图拍到的就是遮罩。不再用原生 FLAG_SECURE——
+  // 它会让系统直接给空白卡片（上黑线+下白屏），和 Flutter 遮罩抢时机。
   // 预取应用图标：后台遮罩中央要用，进后台后才能直接用缓存绘制。
   await PrivacyChannel.preloadAppIcon();
 
@@ -85,7 +85,7 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
         // 真正切后台：记下时间点供回前台判断重锁，并补一次遮罩（幂等）。
-        // 原生 FLAG_SECURE 是系统级双保险，这里 Dart 遮罩是主要可见手段。
+        // 遮罩是保护最近任务缩略图的唯一手段（已不用原生 FLAG_SECURE）。
         _pausedAt ??= DateTime.now();
         if (widget.settings.privacyMask) widget.lock.mask();
         break;
@@ -183,8 +183,8 @@ class _ThemedApp extends StatelessWidget {
 /// 切后台时盖住整屏的遮罩。
 ///
 /// 目的：系统"最近任务"里拍到的缩略图是这一屏，而不是工资明细。
-/// 在 inactive（窗口尚可见）时就盖好，回到 App 会自动撤掉。
-/// 原生 FLAG_SECURE 另外保证系统级黑屏，两者互补。
+/// 在 inactive（窗口尚可见）时就盖好，无论按 Home 键还是返回键退出都能拍到；
+/// 回到 App 会自动撤掉。这是后台隐藏的唯一手段，不再依赖原生 FLAG_SECURE。
 class _PrivacyMask extends StatelessWidget {
   const _PrivacyMask();
 

@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.BitmapDrawable
 import android.os.Bundle
-import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -25,37 +24,6 @@ class MainActivity : FlutterFragmentActivity() {
 
     companion object {
         private const val PRIVACY_CHANNEL = "xinji/privacy"
-    }
-
-    // 后台隐私保护是否开启（对应设置里的「后台隐藏内容」）。默认开，和 Dart 默认值一致。
-    @Volatile
-    private var privacyEnabled = true
-
-    // 当前 Activity 是否在前台。FLAG_SECURE 只在后台加，前台清掉以保留截屏/录屏能力。
-    private var foreground = true
-
-    // 切后台时给窗口加 FLAG_SECURE：系统拍「最近任务」缩略图、截屏、录屏时
-    // 只能拍到黑屏。这是系统级行为，不依赖 Flutter 渲染任何一帧，
-    // 所以既不会出现「后台没盖住」，也不会有「回前台闪一下遮罩」。
-    private fun applyPrivacyFlag() {
-        val flag = WindowManager.LayoutParams.FLAG_SECURE
-        if (!foreground && privacyEnabled) {
-            window.addFlags(flag)
-        } else {
-            window.clearFlags(flag)
-        }
-    }
-
-    override fun onPause() {
-        foreground = false
-        applyPrivacyFlag()
-        super.onPause()
-    }
-
-    override fun onResume() {
-        foreground = true
-        applyPrivacyFlag()
-        super.onResume()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,15 +65,10 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
-        // 后台隐私保护开关：Dart 侧设置变更/启动时把 privacyMask 推过来。
-        // onPause 之前就能拿到值，切后台时 applyPrivacyFlag 即可正确加/不加 flag。
+        // 后台隐私保护通道：只提供应用图标 PNG 字节给 Flutter 画遮罩中央的 logo。
+        // 遮罩本身完全由 Flutter 在 inactive 时绘制；不再用 FLAG_SECURE（会让最近任务变空白卡）。
         MethodChannel(messenger, PRIVACY_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
-                "setEnabled" -> {
-                    privacyEnabled = call.argument<Boolean>("enabled") ?: true
-                    applyPrivacyFlag()
-                    result.success(true)
-                }
                 // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo（闭眼态）。
                 "appIcon" -> {
                     try {
