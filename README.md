@@ -223,15 +223,20 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
 4. **忘记 PIN 只能靠提示语**。提示语也忘了，就只剩「清除数据重装」。
 5. **APK 体积约 96MB**。PP-OCRv6 模型（25MB）、单套 arm64 的 ONNX Runtime + OpenCV native 库都在包里，这是完全离线的代价。只支持 64 位手机（现在的新机都是）。
 6. **检查更新走应用内下载**。仓库已公开，联网只用于读版本号和下载 APK，不带走任何工资数据。默认走 gh-proxy 加速线路（第三方能看到下载 IP，介意就在更新弹窗切官方直链）；下载完做 SHA-256 校验，确保拿到的是完整安装包。
-7. **后台隐藏：原生遮罩层，开关可关**。
+7. **后台隐藏：常驻原生遮罩层，开关可关**。
    Android 的最近任务缩略图是系统在 `onPause` 之后自己拍的，不会等应用把遮罩画完。
    Flutter 画遮罩要经过 platform channel → Dart isolate → build/layout/paint → 合成一整条链路，
    而 Activity 一旦不可见，Flutter engine 还会暂停帧调度 —— 那帧遮罩经常根本出不来，
    表现就是「切后台时很大概率没遮住，最近任务里直接看到工资明细」。
-   所以遮罩改由原生 `PrivacyMaskView` 绘制：`MainActivity.onPause` 里**同步** addView 到
-   FlutterView 之上，`onResume` 时移除。它是窗口级 View，不依赖引擎出帧，
-   系统拍照前一定已经进了窗口，这才是稳定生效的原因。
-   视觉是深色磨砂底 + 中央应用图标 + 闭眼徽标，无任何文字；纯代码绘制，不引入任何位图资源。
+   所以遮罩改由原生 `PrivacyMaskView` 绘制，而且是**常驻**的（首次 `onResume` 挂上，之后只切 alpha）。
+   临时 addView 要走 measure→layout→draw→上传 buffer→合成，至少一帧，照样赶不上系统抓图；
+   常驻之后只剩一次 draw，再把触发点提前到 `onUserLeaveHint`（比 `onPause` 早约 50–100ms），
+   才有稳定上屏的时间窗口。`onPause` 再兜底一次，覆盖锁屏、按返回退出这类不触发 `onUserLeaveHint` 的场景。
+   遮罩底图是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
+   （SurfaceView 的内容不在 `View.draw` 里，`decorView.draw` 只能画出一个洞），
+   缩到 1/6 宽后放大铺满 —— 放大本身即强低通滤波 —— 再叠一层轻微压暗和中央应用图标 + 闭眼徽标。
+   抓不到图时（冷启动第一次离开）退化成深色渐变，至少不泄露内容；模糊之后新旧画面看不出差别，
+   所以用上一次的缓存图也不影响观感。全程纯代码绘制，模糊用自写的两轮 box blur，不引 RenderScript（涨包体）。
    **不用原生 `FLAG_SECURE`**：它会让系统直接给空白卡片（上黑线+下白屏）；
    代价是没有系统级防截屏/录屏/投屏（前台数据仍受应用锁保护）。
    悬浮锁定按钮只是**应用内**浮层（退出 App 即消失），不需要系统悬浮窗权限；
