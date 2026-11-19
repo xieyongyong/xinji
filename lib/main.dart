@@ -191,8 +191,9 @@ class _ThemedApp extends StatelessWidget {
 /// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
 ///
 /// 还有一个不显眼但很关键的职责：**给原生放行**。
-/// Android 13+ 平时把最近任务快照关着（默认白卡），等这里确认「遮罩帧真的 raster 完成」
-/// 之后才允许系统拍照。所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+/// Android 13+ 平时把最近任务快照关着（默认白卡），等这一帧画完才允许系统拍照。
+/// 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+/// 放行本身是异步消息，原生侧用 `foreground` 守卫挡掉「上一轮的迟到放行」。
 class _PrivacyMask extends StatefulWidget {
   const _PrivacyMask();
 
@@ -207,11 +208,17 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
     _allowRecentsScreenshot();
   }
 
-  /// 等这一帧真正走完 raster，再允许系统拍快照。
+  /// 等这一帧走完，再允许系统拍快照。
   ///
   /// 200ms 是硬上限：系统抓图窗口就那么点，超时说明这一帧没赶上，
   /// 此时**不能**放行 —— 保持「禁止拍」，系统会给白卡。
   /// 宁可白卡也不能拍到明文，这是这套机制的唯一底线。
+  ///
+  /// 说明一个精度边界：`endOfFrame` 只保证 UI 线程走完 build/layout/paint
+  /// 并把 layer tree 交给 raster 线程，**不等于已经合成上屏**。
+  /// 所以这里放行仍可能早于最后一刻；真正的兜底在原生侧 ——
+  /// `maskVisible` 带 `foreground` 守卫，会把「上一轮的迟到放行」丢掉，
+  /// 保证它没法把新一轮 onResume 刚做的重置又打开。
   Future<void> _allowRecentsScreenshot() async {
     try {
       await WidgetsBinding.instance.endOfFrame.timeout(const Duration(milliseconds: 200));
@@ -224,7 +231,11 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
 
   @override
   Widget build(BuildContext context) {
-    final bytes = PrivacyChannel.appIconBytes;
+    // 必须用**已解码**的 ui.Image + RawImage。
+    // Image.memory 是异步解码（IO 线程 + event loop），而遮罩从插入到被系统
+    // 抓图只有一两帧，解码根本来不及 —— 表现就是圆盘里空着，
+    // 也就是「频繁切换时中心没有应用图标」。RawImage 是同步绘制，零等待。
+    final icon = PrivacyChannel.appIconImage;
     // 毛玻璃：模糊底下这一帧的真实内容，不铺纯白/不透明底，也不放任何文字。
     // 中央只放应用图标 + 右下角一个闭眼徽标。
     return ClipRect(
@@ -246,10 +257,16 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
                   border: Border.all(color: Colors.white.withValues(alpha: 0.35), width: 1.2),
                 ),
                 alignment: Alignment.center,
-                child: bytes != null
+                child: icon != null
                     ? ClipRRect(
-                        borderRadius: BorderRadius.circular(18),
-                        child: Image.memory(bytes, width: 62, height: 62, fit: BoxFit.contain),
+                        borderRadius: BorderRadius.circular(14),
+                        child: RawImage(
+                          image: icon,
+                          width: 62,
+                          height: 62,
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                        ),
                       )
                     : Icon(Icons.visibility_off_outlined, size: 46, color: Colors.white),
               ),

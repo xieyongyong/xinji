@@ -36,64 +36,67 @@ class MainActivity : FlutterFragmentActivity() {
     @Volatile
     private var privacyEnabled = true
 
-    // 当前 Activity 是否在前台。FLAG_SECURE 只在后台加，前台清掉以保留截屏/录屏能力。
+    // 当前 Activity 是否在前台。
+    // 现在唯一的用途是给 `maskVisible` 通道做代际守卫（见通道处理），
+    // 不再参与 FLAG_SECURE 的加/清 —— 12- 的 flag 是常驻的。
     private var foreground = true
-
-    /**
-     * **Android 13+ 的拍照许可闸门。**
-     *
-     * `setRecentsScreenshotEnabled` 只有两个值，各有各的问题：
-     * - `false`：系统一定不拍 → 最近任务永远是白卡，模糊画面永远看不到；
-     * - `true` ：系统一定拍 → 遮罩那一帧没赶上就是**明文**，没有任何兜底。
-     *
-     * 所以这里不选死值，而是做成「默认禁止 + 画完再放行」：
-     *   onResume / 开关变更 → 置 false（安全默认，最坏结果只是白卡）
-     *   遮罩帧真正 raster 完成 → Dart 通过 `maskVisible` 通道置 true（才允许拍）
-     *   onPause → **不动它**（动了就会把 Dart 刚打开的许可立刻关掉，等于永远白卡）
-     *
-     * 系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
-     * 所以「画完再放行」这个顺序是成立的。
-     */
-    @Volatile
-    private var recentsScreenshotAllowed = false
 
     /**
      * 后台隐私的**系统级兜底**，按版本分两条路。
      *
-     * ## Android 12 及以下：`FLAG_SECURE`
-     * 窗口属性。`onPause` 加、`onResume` 清，系统抓图时读到 flag 出黑帧。
-     * 只在后台加，所以前台截屏、录屏、投屏正常。
+     * ## Android 12 及以下：`FLAG_SECURE` **常驻**
+     * 以前是「onPause 加、onResume 清」，但加/清本身就有时序窗口（清早了可能
+     * 撞上系统抓图），而且 `addFlags` / `clearFlags` 会触发窗口属性刷新（relayout）。
+     * 低版本没有 13+ 那个精确旋钮，为一个截屏能力去赌时序不值得，所以直接锁死：
+     * 开关打开期间 flag 一直挂着，最坏结果是最近任务里一张白卡。
+     * 代价是低版本用户**无法截屏/录屏/投屏** —— 明确的取舍，安全优先。
      *
-     * ## Android 13+：`setRecentsScreenshotEnabled`，动态开关
-     * 见 [recentsScreenshotAllowed]：默认禁止拍（白卡），遮罩帧画完才放行（拍到模糊）。
-     * 注意这里**不能**在 `onPause` 里把它重置成 false —— 那会把 Dart 刚打开的许可
-     * 立刻关掉，退化成「永远白卡」。重置只发生在 `onResume`。
+     * ## Android 13+：`setRecentsScreenshotEnabled`，动态闸门
+     * 见 [setRecentsScreenshotAllowed]。这条路径不做任何窗口 flag 操作，
+     * 避免和那个旋钮打架（会变白卡）。
      *
      * 兜底还有一层：[applyTaskDescription] 把最近任务卡片设成品牌色 + 应用图标，
      * 万一某台机器仍然不拍快照，显示出来是一张正常卡片，不是刺眼的白板。
      */
-    private fun applyPrivacyFlag() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // 13+：这里故意什么都不做。拍照许可由 onResume / 通道单独管理，
-            // 因为 onPause 时刻它可能刚被 Dart 打开（遮罩帧已画完），重置就是自毁。
-            return
-        }
-        // 12 及以下：v2.7.0 的老办法，只在后台加
-        val hide = !foreground && privacyEnabled
+    private fun applySecureFlag() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
         val flag = WindowManager.LayoutParams.FLAG_SECURE
-        if (hide) {
+        // 只在开关打开时挂：用户主动关掉就必须清，否则他永远截不了屏。
+        if (privacyEnabled) {
             window.addFlags(flag)
         } else {
             window.clearFlags(flag)
         }
     }
 
-    /** 13+ 的拍照许可开关。低版本没有这个 API，静默跳过。 */
+    /**
+     * **Android 13+ 的拍照许可闸门。** 低版本没有这个 API，静默跳过。
+     *
+     * `setRecentsScreenshotEnabled` 只有两个值，各有各的问题：
+     * - `false`：系统一定不拍 → 最近任务永远是白卡，模糊画面永远看不到；
+     * - `true` ：系统一定拍 → 遮罩那一帧没赶上就是**明文**，没有任何兜底。
+     *
+     * 所以这里不选死值，而是做成「默认禁止 + 画完再放行」：
+     *   `onResume` **第一行** / 开关变更 → false（安全默认，最坏结果只是白卡）
+     *   遮罩帧画完 → Dart 通过 `maskVisible` 通道置 true（才允许拍）
+     *   `onPause` → **不动它**（动了就会把 Dart 刚打开的许可立刻关掉，等于永远白卡）
+     *
+     * 系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
+     * 所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，绝不会拍到明文。
+     *
+     * ## 唯一必须防的漏洞：迟到的放行
+     * `maskVisible` 是跨线程异步消息。上一轮离开时发出的那条，可能**晚于**
+     * 下一轮的 `onResume` 才被执行，而 `onResume` 刚把许可重置成 false ——
+     * 这条死信就会把它又打开。用户此时再秒切走，系统直接拍到明文。
+     * 这就是「快速点两次返回必漏遮罩」的根因，所以通道处理带了 [foreground]
+     * 守卫（两者都在主线程，顺序严格确定）：正常路径下它一定在 `onPause`
+     * 之后到达（`foreground == false`）；若此刻已经回到前台，说明它是上一轮的
+     * 死信，必须丢弃。
+     */
     private fun setRecentsScreenshotAllowed(allowed: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        // 这里不能因为「值没变」就跳过：字段初始是 false，而系统的默认是 **允许拍**，
+        // 这里不能因为「值没变」就跳过：系统的默认值是 **允许拍**，
         // 启动时必须真的下发一次 false，否则头一次离开就是明文。
-        recentsScreenshotAllowed = allowed
         try {
             setRecentsScreenshotEnabled(allowed)
         } catch (_: Throwable) {
@@ -120,23 +123,29 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onPause() {
         foreground = false
-        applyPrivacyFlag()
+        // 12- 的 FLAG_SECURE 是常驻的，这里不需要做任何事：
+        // 少一次窗口属性变更，就少一个时序风险。
+        // 13+ 的许可也故意不动 —— 它可能刚被 Dart 在遮罩画完后打开。
         super.onPause()
     }
 
     override fun onResume() {
-        foreground = true
-        // 每一轮回到前台都从「禁止拍」重新开始。
-        // 这样下一次离开时，如果遮罩帧没赶上，系统给的是白卡而不是明文。
+        // **第一行、同步**：每一轮回到前台，立刻把「拍照许可」摁回禁止。
+        // 上一轮临走时 Dart 打开的许可绝不能带进新的一轮 —— 否则用户秒切走时，
+        // 系统会在这个窗口期直接拍到没有遮罩的明文。
+        // 放在最前面还有一个作用：它先于 foreground = true 执行，
+        // 保证同一轮里不会有「已回前台但仍放行」的中间态。
         setRecentsScreenshotAllowed(!privacyEnabled)
-        applyPrivacyFlag()
+        foreground = true
         super.onResume()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 启动即从「禁止拍」开始，等遮罩真的画出来再由 Dart 放行
+        // 启动即从「禁止拍」开始，等遮罩真的画出来再由 Dart 放行。
+        // 12- 的 FLAG_SECURE 在这里一次性挂上，之后不再增删（常驻）。
         setRecentsScreenshotAllowed(!privacyEnabled)
+        applySecureFlag()
         applyTaskDescription()
         // 主进程启动时记一笔「上次是谁怎么死的」，设置页的诊断日志会读到它。
         // native 崩溃抓不到 Dart 异常，只有系统这份记录能说清原因。
@@ -168,7 +177,16 @@ class MainActivity : FlutterFragmentActivity() {
         val size = (resources.displayMetrics.density * 128).toInt().coerceAtLeast(96)
         val b = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(b)
-        d.setBounds(0, 0, size, size)
+        if (d is android.graphics.drawable.AdaptiveIconDrawable) {
+            // 自适应图标在 108dp 网格里只画中间 72dp 的安全区，直接 setBounds
+            // 会白白留一圈内边距 —— 放到遮罩的圆盘里会显得小一号。
+            // 放大 1.5 倍（108/72）再居中，超出画布的部分由 Canvas 自动裁掉。
+            val over = (size * 1.5f).toInt()
+            val off = -(over - size) / 2
+            d.setBounds(off, off, off + over, off + over)
+        } else {
+            d.setBounds(0, 0, size, size)
+        }
         d.draw(c)
         return b
     }
@@ -184,21 +202,27 @@ class MainActivity : FlutterFragmentActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
         // 后台隐私保护开关：Dart 侧启动时、以及设置页切换时把 privacyMask 推过来。
-        // 开关状态在这里缓存，onPause 时才能正确决定加不加 flag。
+        // 开关状态缓存在 privacyEnabled，供 12- 的常驻 FLAG_SECURE 和 13+ 的闸门读取。
         MethodChannel(messenger, PRIVACY_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setEnabled" -> {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
                     // 开关变了就从「禁止拍」重新开始（关掉开关则直接允许拍）
                     setRecentsScreenshotAllowed(!privacyEnabled)
-                    applyPrivacyFlag()
+                    applySecureFlag()
                     result.success(true)
                 }
-                // Dart 侧确认「遮罩那一帧已经 raster 完成」——此刻才允许系统拍快照。
-                // 迟到的调用（Activity 已经 stopped）改标记已无效，无害。
+                // Dart 侧确认「遮罩那一帧已经画完」——此刻才允许系统拍快照。
+                //
+                // **必须带 foreground 守卫。** 这条消息是异步跨线程的，
+                // 上一轮离开时发出的那条可能晚于下一轮 onResume 才被执行：
+                // 那时 onResume 刚把许可重置成 false，这条死信会把它又打开，
+                // 用户再秒切走就会拍到明文 —— 这就是「快速返回两次必漏」的根因。
+                // 正常路径下它一定在 onPause 之后到达，此时 foreground == false。
                 "maskVisible" -> {
-                    if (privacyEnabled) setRecentsScreenshotAllowed(true)
-                    result.success(privacyEnabled)
+                    val stale = foreground
+                    if (!stale && privacyEnabled) setRecentsScreenshotAllowed(true)
+                    result.success(!stale)
                 }
                 // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo。
                 "appIcon" -> {

@@ -232,22 +232,30 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
      所以这一帧来得及画上；拖到 `paused` 就晚了（engine 已停帧）。
      回到前台立刻撤掉，不会出现「回前台才画再撤」的闪。
    - **兜底层（原生）**：
-     - Android 12 及以下：`onPause` 给窗口 `addFlags(FLAG_SECURE)`、`onResume` `clearFlags`。
-       只在后台加，前台截屏、录屏、投屏正常。
+     - Android 12 及以下：`FLAG_SECURE` **常驻**（开关打开期间一直挂着，只在用户关掉开关时清）。
+       以前是「`onPause` 加、`onResume` 清」，但加/清本身就有时序窗口，还会触发窗口属性刷新，
+       为一个截屏能力去赌时序不划算，所以直接锁死 —— 最坏结果是白卡。
+       代价是低版本用户**无法截屏/录屏/投屏**，这是明确的取舍。
      - Android 13+：`setRecentsScreenshotEnabled` 做成**动态闸门**，不是死值。
-       平时（`onResume` / 开关变更）置 `false` = 禁止系统拍快照，最坏结果只是白卡；
-       等遮罩那一帧真的 raster 完成（Dart 侧 `endOfFrame`，上限 200ms）才通过
-       `maskVisible` 通道置 `true`，这时系统拍到的就是模糊画面。
-       系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
-       所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，**绝不会拍到明文**。
-       注意 `onPause` 里不能重置这个标记 —— 那会把 Dart 刚打开的许可立刻关掉，退化成永远白卡。
+       平时（`onResume` **第一行** / 开关变更）置 `false` = 禁止系统拍快照，最坏结果只是白卡；
+       等遮罩那一帧画完（Dart 侧 `endOfFrame`，上限 200ms）才通过 `maskVisible` 通道置 `true`，
+       这时系统拍到的就是模糊画面。系统的判断发生在 Activity 进入 STOPPED 时，
+       晚于 Flutter 的 `inactive`，所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，**绝不会拍到明文**。
+       两个必须遵守的约束：
+       ① `onPause` 里不能重置这个标记 —— 那会把 Dart 刚打开的许可立刻关掉，退化成永远白卡；
+       ② `maskVisible` 通道**必须带 `foreground` 守卫** —— 它是异步消息，上一轮离开时发出的那条
+       可能晚于下一轮 `onResume` 才执行，会把刚做的重置又打开，用户再秒切走就拍到明文。
+       这正是「快速点两次返回必漏遮罩」的根因，加了守卫才真正堵死。
        另外用 `TaskDescription` 把卡片设成深色底 + 应用图标 + 「薪迹」，
        真走白卡那条路时也不是一张刺眼的白板。13+ 不叠加 `FLAG_SECURE`，避免和这个旋钮打架。
 
-   应用图标的 PNG 由原生 `appIcon` 通道提供，启动时 `preloadAppIcon()` 预取缓存 ——
-   遮罩在切后台瞬间绘制，那时不能现读 `PackageManager`。
+   应用图标的 PNG 由原生 `appIcon` 通道提供，启动时 `preloadAppIcon()` 预取，
+   并且**立刻解码成 `ui.Image`**，遮罩里用 `RawImage` 同步绘制。
+   不能直接用 `Image.memory`：它走异步解码，而遮罩从插入到被系统抓图只有一两帧，
+   解码来不及就会画出空圆盘（表现为「中心没有应用图标」）。
    栅格化时必须给固定画布（128dp）：自适应图标（Android 8+ 默认）的
-   `intrinsicWidth/Height` 是 `-1`，照它建 Bitmap 只有 1×1 像素，遮罩上等于没有图标。
+   `intrinsicWidth/Height` 是 `-1`，照它建 Bitmap 只有 1×1 像素，遮罩上等于没有图标；
+   另外自适应图标自带 108dp/72dp 的安全边距，栅格化时放大 1.5 倍再裁切才能填满圆盘。
 
    说明：曾系统性试过四种原生遮罩（临时 `addView` / 常驻 View 切 alpha /
    `SurfaceView` + `lockCanvas` 同步提交 / `SurfaceControl` 事务切 layer alpha），
