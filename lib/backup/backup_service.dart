@@ -56,7 +56,6 @@ class BackupService {
     'privacy_mask',
     'hide_amounts',
     'floating_lock',
-    'floating_lock_size',
     'cloud_auto_backup',
   ];
   static const _prefIntKeys = [
@@ -65,6 +64,7 @@ class BackupService {
     'theme_seed_index',
     'theme_mode',
     'lock_delay_seconds',
+    'floating_lock_size',
     'current_employer_id',
     'cloud_auto_backup_day',
     'cloud_auto_backup_last_at',
