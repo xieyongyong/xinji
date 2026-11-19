@@ -234,15 +234,22 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
    - 常驻 `SurfaceView` + `SurfaceControl.Transaction.setAlpha()`（buffer 里常放不透明遮罩）更糟：
      layer 的 alpha 会在 surface 重建时被系统复位成 1，不透明遮罩直接盖住前台界面，App 没法用。
 
-   所以真正的保障是 **`FLAG_SECURE`**：`onPause` 给窗口 `addFlags`、`onResume` `clearFlags`。
-   它是窗口属性，系统抓图时自己判断，带 flag 的窗口直接出黑帧 —— **不依赖 App 渲染任何一帧**，
-   上滑手势、返回键、Home、锁屏任何路径都拦得住。只在后台加、回前台清，
-   所以**前台的截屏/录屏/投屏完全正常**。
-   代价是最近任务里显示的是**空白卡片**（部分 ROM 上是一条白/黑卡片），看不到画面 ——
+   所以真正的保障是系统级标记，按版本分两条路：
+   - **Android 13+（API 33）**：`setRecentsScreenshotEnabled(false)`。它是 `ActivityRecord` 上的
+     **持久标记**，系统在把 Activity 置为 stopped 时看它决定是否拍快照 —— 不拍的话最近任务
+     显示**应用图标卡片**。好处是不用抢时机（标记一直挂着），且**连后台的截屏/录屏/投屏都不影响**。
+   - **Android 12 及以下**：`onPause` 给窗口 `addFlags(FLAG_SECURE)`、`onResume` `clearFlags`。
+     带 flag 的窗口系统直接出黑帧，代价是最近任务显示空白卡片，且后台期间无法截屏录屏。
+     必须后台加、前台清 —— 常开会让前台截屏也变黑。
+
+   两条路的共同点：**都不依赖 App 渲染任何一帧**，所以上滑手势、返回键、Home、锁屏
+   任何路径都拦得住。代价是最近任务里**看不到画面**（图标卡片或空白卡片）——
    这是系统行为，无法改成「漂亮的模糊」。**「好看」和「一定遮住」在 Android 上只能选一个。**
 
-   另有一个常驻的 `PrivacyMaskView`（普通 View，`alpha = 0`）做视觉补充，
-   防止个别 ROM 忽略 flag。它的底图是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
+   视觉遮罩（常驻的 `PrivacyMaskView`，普通 View，`alpha = 0`）**只在 Android 12 及以下启用**，
+   作为 `FLAG_SECURE` 之外的兜底；13+ 系统根本不拍快照，遮罩画了也进不了任何东西，
+   反而多一条「误亮把前台糊住」的风险路径，所以直接不挂。
+   遮罩底图是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
    （SurfaceView 的内容不在 `View.draw` 里，`decorView.draw` 只能画出一个洞），
    缩到 1/6 宽后放大铺满 —— 放大本身即强低通滤波 —— 再叠一层轻微压暗 + 中央应用图标 + `visibility_off` 徽标。
    抓不到图时（冷启动第一次离开）退化成深色底。模糊用自写的两轮 box blur，不引 RenderScript（涨包体）。

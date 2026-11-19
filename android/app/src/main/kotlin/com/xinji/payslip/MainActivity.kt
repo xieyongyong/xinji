@@ -2,6 +2,7 @@ package com.xinji.payslip
 
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -62,26 +63,46 @@ class MainActivity : FlutterFragmentActivity() {
     private val snapshotTask = Runnable { refreshSnapshot() }
 
     /**
-     * 后台隐私的**唯一可靠手段**，也是 v2.7.0 用的那个。
+     * 后台隐私的**唯一可靠手段**。分两条路，都是系统级的，都不依赖 App 渲染任何一帧。
      *
-     * `FLAG_SECURE` 是窗口属性：系统在抓最近任务缩略图、截屏、录屏时自己判断，
-     * 带这个 flag 的窗口直接产出黑帧。它**不依赖 App 渲染任何一帧**，
-     * 所以上滑手势、返回键、Home、锁屏，任何一条路径都拦得住 —— 这一点是
-     * 「App 自己画遮罩」永远做不到的（画遮罩要等 vsync + 合成，系统那条路抓得更早，
-     * 前前后后试了四种原生方案都被证明抢不到时机）。
+     * ## Android 13+（API 33）：`setRecentsScreenshotEnabled(false)`
+     * 这是 `ActivityRecord` 上的**持久标记**：系统在把 Activity 置为 stopped 时，
+     * 看这个标记决定要不要拍快照 —— 不拍的话最近任务显示「应用图标卡片」。
+     * 关键好处是**不需要抢 onPause 的时机**（标记一直挂着），而且
+     * **不影响截屏、录屏、投屏**（连后台都不影响）。
      *
-     * 只在后台加、回到前台清：前台的截屏、录屏、投屏全部正常。
-     * 代价是最近任务里显示的是**空白卡片**（部分 ROM 上是一条白/黑卡片），
-     * 看不到画面 —— 这是系统行为，无法改成「漂亮的模糊」。
+     * ## Android 12 及以下：`FLAG_SECURE`
+     * 窗口属性，系统抓图时自己判断，带 flag 的窗口直接出黑帧，
+     * 代价是最近任务显示空白卡片，且后台期间无法截屏/录屏。
+     * 必须**只在后台加、回前台清** —— 常开会让前台截屏也变黑。
+     *
+     * 两条路的共同点：都在系统层判定，上滑手势、返回键、Home、锁屏任何路径都拦得住。
+     * 这一点「App 自己画遮罩」永远做不到（要等 vsync + 合成，系统那条路抓得更早，
+     * 前前后后试了五种方案都被证明抢不到时机）。
      */
     private fun applyPrivacyFlag() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // 跟着开关走就行，不需要看 foreground：它只影响「本 Activity 被 stop 时拍不拍」，
+            // 前台正在使用时根本没有快照行为，也就不会影响用户截屏。
+            setRecentsScreenshotEnabled(!privacyEnabled)
+            return
+        }
+        val hide = !foreground && privacyEnabled
         val flag = WindowManager.LayoutParams.FLAG_SECURE
-        if (!foreground && privacyEnabled) {
+        if (hide) {
             window.addFlags(flag)
         } else {
             window.clearFlags(flag)
         }
     }
+
+    // 是否还需要那层「视觉遮罩」。
+    //
+    // Android 13+ 用 setRecentsScreenshotEnabled(false)，系统根本不拍快照，
+    // 遮罩画了也进不了任何东西 —— 反而多一条「误亮把前台糊住」的风险路径。
+    // 所以 13+ 完全关掉视觉层，只留系统标记；12 及以下才需要它做 FLAG_SECURE 之外的兜底。
+    private val needsVisualMask: Boolean
+        get() = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
 
     /** 首次进入前台时把遮罩挂上，之后一直常驻，只在进出后台时切 alpha。 */
     private fun attachMaskIfNeeded() {
@@ -217,32 +238,33 @@ class MainActivity : FlutterFragmentActivity() {
      *
      * 注意它**并不比 onPause 早**：两者是同一个 binder 消息（handlePauseActivity）
      * 里前后脚调用的，中间主线程不返回消息队列，一次 vsync 都等不到。
-     * 所以这里只做一件有价值的事：趁 FLAG_SECURE 还没加、Surface 仍可读，
-     * 抓一张最新画面当遮罩底图。遮罩本身留到 onPause 再亮，避免误回调时在前台闪一下。
+     * 所以这里只做一件有价值的事：趁 12- 的 FLAG_SECURE 还没加、Surface 仍可读，
+     * 抓一张最新画面当遮罩底图。13+ 根本不需要遮罩，直接跳过。
      */
     override fun onUserLeaveHint() {
-        if (!isFinishing) refreshSnapshot()
+        if (!isFinishing && needsVisualMask) refreshSnapshot()
         super.onUserLeaveHint()
     }
 
     override fun onPause() {
-        // 先打 FLAG_SECURE，再走暂停流程。
-        // 这是整套方案里唯一真正关键的一步：它不渲染任何东西，只是给窗口做个标记，
-        // 系统抓快照时读到这个标记就直接出黑帧 —— 所以不存在「来不及」。
+        // 先打系统标记，再走暂停流程。
+        // 这是整套方案里唯一真正关键的一步：它不渲染任何东西，只是给窗口/Activity
+        // 做个标记，系统抓快照时读到就直接不拍（13+）或出黑帧（12-）。
         foreground = false
         applyPrivacyFlag()
 
-        // 下面是视觉补充（万一某些 ROM 忽略 flag）。注意这里不再抓快照：
-        // flag 已经加上，PixelCopy 读自己的窗口会失败。
-        showMask()
+        // Android 12 及以下才需要视觉遮罩兜底。
+        // 13+ 不挂遮罩，也就不存在「前台被遮」的任何可能。
+        if (needsVisualMask) showMask()
         super.onPause()
     }
 
     override fun onResume() {
-        // 回前台第一件事就是清 flag，否则截屏、录屏、投屏全是黑的。
+        // 回前台第一件事就是恢复标记（12 及以下要清 FLAG_SECURE，否则截屏全黑）
         foreground = true
         applyPrivacyFlag()
         super.onResume()
+        if (!needsVisualMask) return
         attachMaskIfNeeded()
         hideMask()
         // 空闲后补一张新快照，供下一次离开时使用。800ms 是为了让首帧和
