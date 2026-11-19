@@ -142,7 +142,9 @@ class PrivacyMaskSurfaceView @JvmOverloads constructor(
      *         调用方需要退回「改内容」的老路径。
      */
     private fun applyLayerAlpha(alpha: Float): Boolean {
-        val sc: SurfaceControl? = try {
+        // 这里不能声明成 SurfaceControl?：setAlpha 的形参是非空的，
+        // 而 `?: return` 之后已经是非空类型了（之前写成可空直接编译失败）。
+        val sc: SurfaceControl = try {
             surfaceControl
         } catch (_: Throwable) {
             null

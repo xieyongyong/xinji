@@ -145,7 +145,9 @@ class MainActivity : FlutterFragmentActivity() {
      */
     private fun setFlutterLayerAlpha(alpha: Float) {
         val sv = findFlutterSurfaceView() ?: return
-        val sc: SurfaceControl? = try {
+        // 不能声明成 SurfaceControl?：setAlpha 的形参非空，
+        // `?: return` 之后已经是非空类型（写成可空会直接编译失败）。
+        val sc: SurfaceControl = try {
             sv.surfaceControl
         } catch (_: Throwable) {
             null
