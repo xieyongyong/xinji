@@ -30,16 +30,37 @@ class MainActivity : FlutterFragmentActivity() {
 
         /** 最近任务卡片的主色（系统不拍快照时显示的那张卡）。不能用 const：toInt() 不是常量表达式 */
         private val TASK_COLOR = 0xFF23262B.toInt()
+
+        /**
+         * `onPause` 时遮罩还没就绪，最多再等几次、每次隔多久。
+         * 2 × 30ms，加上 `onPause` 本身的时刻，总余量约 60ms。
+         */
+        private const val RELEASE_RETRIES = 2
+        private const val RELEASE_RETRY_MS = 30L
     }
 
     // 后台隐私保护是否开启（对应设置里的「后台隐藏内容」）。默认开，和 Dart 默认值一致。
     @Volatile
     private var privacyEnabled = true
 
-    // 当前 Activity 是否在前台。
-    // 现在唯一的用途是给 `maskVisible` 通道做代际守卫（见通道处理），
-    // 不再参与 FLAG_SECURE 的加/清 —— 12- 的 flag 是常驻的。
-    private var foreground = true
+    // 本轮「遮罩是否已经画好」。
+    //
+    // 只在 `onResume` 里清零、在 `onPause` 里检查一次。消息本身**不触发任何放行**，
+    // 只是把这个布尔翻成 true —— 于是「消息什么时候到」不再影响结果，
+    // 真正的放行动作固定在 `onPause`，由原生自己掌握时机。
+    //
+    // 上一版这里叫 `foreground`，用来做「迟到消息」的守卫，但它有个致命误判：
+    // 全面屏手势缓慢返回时，`inactive` 早于 `onPause`，遮罩放行信号正好在这个缝里
+    // 到达 —— 那一刻 Activity 还是 RESUMED（foreground == true），守卫把它当成
+    // 上一轮的死信丢掉，于是 `onPause` 时许可仍是 false，系统只能给白卡。
+    // 手势越慢缝越大，表现为「每次返回都是白卡」。
+    private var maskReady = false
+
+    // 遮罩代数。Dart 侧每次新建遮罩 State 都带一个自增序号下来，
+    // 原生只接受比它大的序号 —— 上一轮的死信序号必然 ≤ 已处理的，直接丢弃。
+    // 这是比 `foreground` 布尔更精确的代际判定：它认的是「哪一次遮罩」，
+    // 而不是「此刻在不在前台」。
+    private var lastMaskSeq = 0
 
     /**
      * 后台隐私的**系统级兜底**，按版本分两条路。
@@ -76,22 +97,24 @@ class MainActivity : FlutterFragmentActivity() {
      * - `false`：系统一定不拍 → 最近任务永远是白卡，模糊画面永远看不到；
      * - `true` ：系统一定拍 → 遮罩那一帧没赶上就是**明文**，没有任何兜底。
      *
-     * 所以这里不选死值，而是做成「默认禁止 + 画完再放行」：
-     *   `onResume` **第一行** / 开关变更 → false（安全默认，最坏结果只是白卡）
-     *   遮罩帧画完 → Dart 通过 `maskVisible` 通道置 true（才允许拍）
-     *   `onPause` → **不动它**（动了就会把 Dart 刚打开的许可立刻关掉，等于永远白卡）
+     * 所以这里不选死值，而是做成「默认禁止 + 遮罩就绪后放行」，但**放行点固定在
+     * `onPause`**，不是「收到 Dart 消息的那一刻」：
+     *   `onResume` 第一行 / 开关变更 → false（安全默认，最坏结果只是白卡）
+     *   遮罩帧画完 → Dart 通过 `maskReady` 通道把 [maskReady] 置 true（只置状态）
+     *   `onPause` → `if (maskReady)` 才置 true（此刻才真正允许系统拍）
      *
-     * 系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，
-     * 所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，绝不会拍到明文。
+     * ## 为什么不能「收到消息就放行」
+     * 那是上一版的写法，被一次实测否掉了：全面屏手势**缓慢**返回时，
+     * `inactive` 早于 `onPause`，遮罩画完后发出的放行信号到达原生时，
+     * Activity 仍然是 RESUMED —— 守卫把它判成「上一轮的迟到消息」丢弃，
+     * 随后 `onPause` 时许可仍是 false，系统只能拍白卡。手势越慢缝越大。
+     * 把动作挪到 `onPause` 之后，这个缝就不存在了：消息只需要「到过」，
+     * 什么时候到都行。
      *
-     * ## 唯一必须防的漏洞：迟到的放行
-     * `maskVisible` 是跨线程异步消息。上一轮离开时发出的那条，可能**晚于**
-     * 下一轮的 `onResume` 才被执行，而 `onResume` 刚把许可重置成 false ——
-     * 这条死信就会把它又打开。用户此时再秒切走，系统直接拍到明文。
-     * 这就是「快速点两次返回必漏遮罩」的根因，所以通道处理带了 [foreground]
-     * 守卫（两者都在主线程，顺序严格确定）：正常路径下它一定在 `onPause`
-     * 之后到达（`foreground == false`）；若此刻已经回到前台，说明它是上一轮的
-     * 死信，必须丢弃。
+     * ## 迟到的放行怎么防
+     * 靠 Dart 侧 `if (!mounted) return`（遮罩被撤掉时 State 已 dispose，
+     * pending 的 async 自己就退出了）+ 消息里的单调序号 [lastMaskSeq]。
+     * 序号认的是「哪一次遮罩」，比「此刻在不在前台」精确得多。
      */
     private fun setRecentsScreenshotAllowed(allowed: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -122,21 +145,53 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onPause() {
-        foreground = false
+        // 真正离开前台的时刻 —— **放行就发生在这里**，且只发生一次。
+        //
+        // 为什么不在收到 Dart 消息时放行：`inactive` 早于 `onPause`，手势慢的时候
+        // 放行信号会在 Activity 还是 RESUMED 时就到达，无法和「上一轮的死信」区分。
+        // 放到这里，消息只需「到过」，到达时机不再影响结果。
+        //
+        // 没就绪就保持禁止：系统不拍 → 白卡。白卡 > 明文，这是唯一底线。
+        releaseWhenReady(RELEASE_RETRIES)
         // 12- 的 FLAG_SECURE 是常驻的，这里不需要做任何事：
         // 少一次窗口属性变更，就少一个时序风险。
-        // 13+ 的许可也故意不动 —— 它可能刚被 Dart 在遮罩画完后打开。
         super.onPause()
     }
 
+    /**
+     * 遮罩已就绪就放行；还没就绪就隔一小会儿再问一次（最多 [retries] 次）。
+     *
+     * 为什么需要「再问」：点返回键快速退出时，`onPause` 几乎和 Flutter 的
+     * `inactive` 同时到，遮罩那两帧还没画完、[maskReady] 仍是 false。
+     * 直接放弃就是白卡；等一个短间隔，通常够 Dart 把最后那一帧提交上来。
+     * 系统抓快照发生在 Activity 进入 STOPPED 时，比 `onPause` 晚几十到几百毫秒，
+     * 所以这点余量是有效的。
+     *
+     * 安全性：**只在 [maskReady] 为真时放行**。而 [maskReady] 会被 `onResume`
+     * 清掉，所以万一用户在重试期间又回到前台，这里自然不会放行。
+     */
+    private fun releaseWhenReady(retries: Int) {
+        if (!privacyEnabled) return
+        if (maskReady) {
+            setRecentsScreenshotAllowed(true)
+            return
+        }
+        if (retries <= 0) return // 到点仍未就绪 → 保持禁止 → 白卡
+        try {
+            window.decorView.postDelayed({
+                if (!isDestroyed) releaseWhenReady(retries - 1)
+            }, RELEASE_RETRY_MS)
+        } catch (_: Throwable) {
+            // 窗口已销毁：保持禁止即可
+        }
+    }
+
     override fun onResume() {
-        // **第一行、同步**：每一轮回到前台，立刻把「拍照许可」摁回禁止。
-        // 上一轮临走时 Dart 打开的许可绝不能带进新的一轮 —— 否则用户秒切走时，
-        // 系统会在这个窗口期直接拍到没有遮罩的明文。
-        // 放在最前面还有一个作用：它先于 foreground = true 执行，
-        // 保证同一轮里不会有「已回前台但仍放行」的中间态。
+        // **第一行、同步**：每一轮回到前台，立刻把「拍照许可」摁回禁止，
+        // 并把本轮的就绪标记清掉 —— 上一轮打开的许可绝不能带进新的一轮，
+        // 否则用户秒切走时，系统会在这个窗口期直接拍到没有遮罩的明文。
         setRecentsScreenshotAllowed(!privacyEnabled)
-        foreground = true
+        maskReady = false
         super.onResume()
     }
 
@@ -209,20 +264,27 @@ class MainActivity : FlutterFragmentActivity() {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
                     // 开关变了就从「禁止拍」重新开始（关掉开关则直接允许拍）
                     setRecentsScreenshotAllowed(!privacyEnabled)
+                    // 开关是一次状态重置，把本轮的就绪标记一并清掉，
+                    // 免得旧状态带进下一次离开。
+                    maskReady = false
                     applySecureFlag()
                     result.success(true)
                 }
-                // Dart 侧确认「遮罩那一帧已经画完」——此刻才允许系统拍快照。
+                // Dart 侧确认「遮罩那一帧已经画完」——**只置状态，不做任何动作**。
+                // 真正的放行在 `onPause` 里，见 setRecentsScreenshotAllowed 的说明。
                 //
-                // **必须带 foreground 守卫。** 这条消息是异步跨线程的，
-                // 上一轮离开时发出的那条可能晚于下一轮 onResume 才被执行：
-                // 那时 onResume 刚把许可重置成 false，这条死信会把它又打开，
-                // 用户再秒切走就会拍到明文 —— 这就是「快速返回两次必漏」的根因。
-                // 正常路径下它一定在 onPause 之后到达，此时 foreground == false。
-                "maskVisible" -> {
-                    val stale = foreground
-                    if (!stale && privacyEnabled) setRecentsScreenshotAllowed(true)
-                    result.success(!stale)
+                // 带 `seq` 是为了丢弃上一轮的迟到消息：Dart 每次新建遮罩 State
+                // 都会带一个自增序号，这里只认比 [lastMaskSeq] 大的。
+                // 比 `foreground` 布尔精确 —— 它认「哪一次遮罩」，不是「此刻在不在前台」。
+                "maskReady" -> {
+                    val seq = call.argument<Int>("seq") ?: 0
+                    if (seq > lastMaskSeq) {
+                        lastMaskSeq = seq
+                        maskReady = true
+                        result.success(true)
+                    } else {
+                        result.success(false) // 上一轮的死信，丢弃
+                    }
                 }
                 // 应用图标的 PNG 字节，供 Dart 画后台遮罩中央的 logo。
                 "appIcon" -> {

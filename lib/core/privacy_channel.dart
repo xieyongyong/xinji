@@ -12,7 +12,7 @@ import 'package:flutter/services.dart';
 ///    所以这一帧来得及画，系统抓「最近任务」缩略图时拍到的是模糊画面。
 /// 2. **兜底层（系统级标记）**
 ///    Android 13+：`setRecentsScreenshotEnabled` 动态闸门，默认禁止拍（白卡），
-///    遮罩画完才放行；Android 12 及以下：`FLAG_SECURE` 常驻。
+///    遮罩画完置「就绪」、`onPause` 时再放行；Android 12 及以下：`FLAG_SECURE` 常驻。
 class PrivacyChannel {
   static const MethodChannel _channel = MethodChannel('xinji/privacy');
 
@@ -51,17 +51,22 @@ class PrivacyChannel {
     }
   }
 
-  /// 告诉原生「遮罩那一帧已经画完了，可以允许系统拍快照」。
+  /// 告诉原生「遮罩那一帧已经画完了」。
   ///
-  /// 只在 Android 13+ 有意义：那边平时把最近任务快照关着（默认给白卡），
-  /// 等遮罩真的画进 Surface 才打开许可，于是拍到的就是模糊画面而不是明文。
-  /// 如果这一帧没赶上（超时就不调用），系统保持关闭 → 白卡，绝不泄露内容。
+  /// 语义是**置状态**，不是「立刻放行」：
+  /// 原生只是把本轮的就绪标记翻成 true，真正的放行动作固定在 `onPause` 里做。
+  /// 这样「消息什么时候到」不再影响结果 —— 全面屏手势缓慢返回时，
+  /// `inactive` 早于 `onPause`，消息会在 Activity 还是 RESUMED 时就到；
+  /// 如果收到就放行，它会被当成上一轮的死信丢掉（白卡），或者反过来
+  /// 提前放行（明文）。挂到 `onPause` 之后，这个缝就没了。
   ///
-  /// 原生侧还会用 `foreground` 挡掉迟到的调用（上一轮的放行晚于 onResume 到达），
-  /// 避免它把新一轮刚做的重置又打开。
-  static Future<void> markMaskVisible() async {
+  /// [seq] 是遮罩的代数（每次新建遮罩 State 递增），原生只接受更大的序号，
+  /// 用来丢弃上一轮的迟到消息。
+  ///
+  /// 只在 Android 13+ 有意义；低版本走常驻 `FLAG_SECURE`，调用无副作用。
+  static Future<void> markMaskReady(int seq) async {
     try {
-      await _channel.invokeMethod<bool>('maskVisible');
+      await _channel.invokeMethod<bool>('maskReady', {'seq': seq});
     } catch (_) {}
   }
 }

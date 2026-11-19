@@ -190,10 +190,11 @@ class _ThemedApp extends StatelessWidget {
 /// 目的：系统「最近任务」里拍到的缩略图是这一屏，而不是工资明细。
 /// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
 ///
-/// 还有一个不显眼但很关键的职责：**给原生放行**。
-/// Android 13+ 平时把最近任务快照关着（默认白卡），等这一帧画完才允许系统拍照。
-/// 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
-/// 放行本身是异步消息，原生侧用 `foreground` 守卫挡掉「上一轮的迟到放行」。
+/// 还有一个不显眼但很关键的职责：**告诉原生「遮罩已就绪」**。
+/// Android 13+ 平时把最近任务快照关着（默认白卡），遮罩画好后才置就绪，
+/// 原生在 `onPause` 里放行 —— 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+/// 注意是「置状态」不是「直接放行」：`inactive` 早于 `onPause`，收到就放行会被
+/// 当成上一轮的死信丢掉（白卡）。详见 [PrivacyChannel.markMaskReady]。
 class _PrivacyMask extends StatefulWidget {
   const _PrivacyMask();
 
@@ -202,27 +203,32 @@ class _PrivacyMask extends StatefulWidget {
 }
 
 class _PrivacyMaskState extends State<_PrivacyMask> {
+  /// 遮罩代数：每次新建遮罩都拿一个新号，原生据此丢弃上一轮的迟到消息。
+  /// 必须是静态的（跨 State 实例递增），否则新实例从 1 开始，反而比旧的还小。
+  static int _seqCounter = 0;
+
+  late final int _seq;
+
   @override
   void initState() {
     super.initState();
+    _seq = ++_seqCounter;
     _allowRecentsScreenshot();
   }
 
-  /// 等遮罩**真正上屏**，再允许系统拍快照。
+  /// 等遮罩**真正上屏**，再告诉原生「本轮就绪」。
   ///
-  /// 只等一次 `endOfFrame` 是不够的 —— 它只保证 UI 线程走完 build/layout/paint
-  /// 并把 layer tree 交给 raster 线程，此时屏幕上最后一帧**还是明文**。
-  /// 这次放行太早，系统紧接着抓帧，抓到的就是那帧明文。
+  /// 注意这里只是置状态，不直接放行 —— 原生把放行动作放在 `onPause` 里。
+  /// 原因是 `inactive` 早于 `onPause`：手势慢的时候本条消息会在 Activity
+  /// 还是 RESUMED 时报到，收到就放行会被判成「上一轮的死信」丢掉（白卡）。
   ///
-  /// 所以按「UI 提交 → 栅格完成 → 合成上屏」三段来等：
-  ///   1. 第一次 endOfFrame：遮罩这一帧交给 raster；
-  ///   2. 第二次 endOfFrame：再要一帧，保证第一次的栅格已经落盘；
-  ///   3. 再等 2 个 vsync（约 32ms）：给 SurfaceFlinger 合成上屏。
-  /// 合计约 50ms，正常抓图窗口（几十到上百 ms）都吃得下。
-  ///
-  /// 250ms 是硬上限：任何一环超时都**不放行**，保持「禁止拍」→ 系统给白卡。
-  /// 宁可白卡也不能拍到明文，这是这套机制的唯一底线。
-  /// 「上一轮的迟到放行」另由原生侧 `foreground` 守卫丢弃。
+  /// 仍然要把等待做足，因为原生虽然到 `onPause` 才放行，但系统抓图就在那之后
+  /// 不久，遮罩必须已经合成上屏：
+  ///   1. 第一次 `endOfFrame`：遮罩这一帧交给 raster；
+  ///   2. 第二次 `endOfFrame`：保证第一次的栅格已经落盘；
+  ///   3. 再等 16ms（1 个 vsync）：给 SurfaceFlinger 合成上屏。
+  /// 合计约 30ms。250ms 是硬上限，任何一环超时都**不置就绪** →
+  /// 原生保持「禁止拍」→ 系统给白卡。宁可白卡也不能拍到明文。
   Future<void> _allowRecentsScreenshot() async {
     const limit = Duration(milliseconds: 250);
     try {
@@ -231,13 +237,13 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
       // 再等一帧：第一帧的栅格化在这期间完成
       await WidgetsBinding.instance.endOfFrame.timeout(limit);
       if (!mounted) return;
-      // 留两个 vsync 给合成器上屏
-      await Future<void>.delayed(const Duration(milliseconds: 32));
+      // 留一个 vsync 给合成器上屏
+      await Future<void>.delayed(const Duration(milliseconds: 16));
     } catch (_) {
-      return; // 超时：不放行，交白卡
+      return; // 超时：不置就绪，交白卡
     }
-    if (!mounted) return; // 遮罩已经被撤掉（比如瞬间又回到前台），没必要放行
-    await PrivacyChannel.markMaskVisible();
+    if (!mounted) return; // 遮罩已经被撤掉（比如瞬间又回到前台），没必要置就绪
+    await PrivacyChannel.markMaskReady(_seq);
   }
 
   @override
