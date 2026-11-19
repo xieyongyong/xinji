@@ -191,10 +191,10 @@ class _ThemedApp extends StatelessWidget {
 /// 在 `inactive`（窗口尚可见）时就盖好，回到 App 会自动撤掉。
 ///
 /// 还有一个不显眼但很关键的职责：**告诉原生「遮罩已就绪」**。
-/// Android 13+ 平时把最近任务快照关着（默认白卡），遮罩画好后才置就绪，
-/// 原生在 `onPause` 里放行 —— 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
-/// 注意是「置状态」不是「直接放行」：`inactive` 早于 `onPause`，收到就放行会被
-/// 当成上一轮的死信丢掉（白卡）。详见 [PrivacyChannel.markMaskReady]。
+/// Android 13+ 平时把最近任务快照关着（默认白卡），遮罩画好后才置就绪、
+/// 原生立刻放行 —— 所以拍到的要么是模糊画面，要么是白卡，绝不会是明文。
+/// 为什么不能等 `onPause` 再放行：荣耀 MagicOS 在 `onPause` 之前就抓图了。
+/// 详见 [PrivacyChannel.markMaskReady]。
 class _PrivacyMask extends StatefulWidget {
   const _PrivacyMask();
 
@@ -218,12 +218,10 @@ class _PrivacyMaskState extends State<_PrivacyMask> {
 
   /// 等遮罩**真正上屏**，再告诉原生「本轮就绪」。
   ///
-  /// 注意这里只是置状态，不直接放行 —— 原生把放行动作放在 `onPause` 里。
-  /// 原因是 `inactive` 早于 `onPause`：手势慢的时候本条消息会在 Activity
-  /// 还是 RESUMED 时报到，收到就放行会被判成「上一轮的死信」丢掉（白卡）。
+  /// 原生收到这条消息就**立刻放行**（不等 `onPause`）—— 荣耀 MagicOS 在
+  /// `onPause` 之前就把最近任务缩略图抓走了，等 `onPause` 必然白卡。
   ///
-  /// 仍然要把等待做足，因为原生虽然到 `onPause` 才放行，但系统抓图就在那之后
-  /// 不久，遮罩必须已经合成上屏：
+  /// 所以这里的等待必须做足，否则放行的就是旧帧（明文）：
   ///   1. 第一次 `endOfFrame`：遮罩这一帧交给 raster；
   ///   2. 第二次 `endOfFrame`：保证第一次的栅格已经落盘；
   ///   3. 再等 16ms（1 个 vsync）：给 SurfaceFlinger 合成上屏。

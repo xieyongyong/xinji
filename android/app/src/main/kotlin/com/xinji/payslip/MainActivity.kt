@@ -45,15 +45,14 @@ class MainActivity : FlutterFragmentActivity() {
 
     // 本轮「遮罩是否已经画好」。
     //
-    // 只在 `onResume` 里清零、在 `onPause` 里检查一次。消息本身**不触发任何放行**，
-    // 只是把这个布尔翻成 true —— 于是「消息什么时候到」不再影响结果，
-    // 真正的放行动作固定在 `onPause`，由原生自己掌握时机。
+    // 由 `maskReady` 通道置 true，`onResume` 清零。放行有两条路径：
+    // 消息到达时立即放行（照顾荣耀这种在 onPause 之前抓图的 ROM），
+    // 以及 `onPause` 里再兜一次（照顾消息晚到的 ROM）。
     //
-    // 上一版这里叫 `foreground`，用来做「迟到消息」的守卫，但它有个致命误判：
-    // 全面屏手势缓慢返回时，`inactive` 早于 `onPause`，遮罩放行信号正好在这个缝里
-    // 到达 —— 那一刻 Activity 还是 RESUMED（foreground == true），守卫把它当成
-    // 上一轮的死信丢掉，于是 `onPause` 时许可仍是 false，系统只能给白卡。
-    // 手势越慢缝越大，表现为「每次返回都是白卡」。
+    // 早期版本这里是一个 `foreground` 布尔，用来做「迟到消息」守卫，
+    // 但它有个致命误判：全面屏手势缓慢返回时，`inactive` 早于 `onPause`，
+    // 放行信号到达那一刻 Activity 还是 RESUMED（foreground == true），
+    // 被当成上一轮的死信丢掉 → 每次返回都白卡。现在改用序号 [lastMaskSeq]。
     private var maskReady = false
 
     // 遮罩代数。Dart 侧每次新建遮罩 State 都带一个自增序号下来，
@@ -97,24 +96,26 @@ class MainActivity : FlutterFragmentActivity() {
      * - `false`：系统一定不拍 → 最近任务永远是白卡，模糊画面永远看不到；
      * - `true` ：系统一定拍 → 遮罩那一帧没赶上就是**明文**，没有任何兜底。
      *
-     * 所以这里不选死值，而是做成「默认禁止 + 遮罩就绪后放行」，但**放行点固定在
-     * `onPause`**，不是「收到 Dart 消息的那一刻」：
+     * 所以这里不选死值，而是做成「默认禁止 + 遮罩就绪后放行」：
      *   `onResume` 第一行 / 开关变更 → false（安全默认，最坏结果只是白卡）
-     *   遮罩帧画完 → Dart 通过 `maskReady` 通道把 [maskReady] 置 true（只置状态）
-     *   `onPause` → `if (maskReady)` 才置 true（此刻才真正允许系统拍）
+     *   遮罩帧画完 → Dart 通过 `maskReady` 通道报到，**当刻即放行**
+     *   `onPause` → [releaseWhenReady] 再兜一次（消息比 onPause 晚到的 ROM）
      *
-     * ## 为什么不能「收到消息就放行」
-     * 那是上一版的写法，被一次实测否掉了：全面屏手势**缓慢**返回时，
-     * `inactive` 早于 `onPause`，遮罩画完后发出的放行信号到达原生时，
-     * Activity 仍然是 RESUMED —— 守卫把它判成「上一轮的迟到消息」丢弃，
-     * 随后 `onPause` 时许可仍是 false，系统只能拍白卡。手势越慢缝越大。
-     * 把动作挪到 `onPause` 之后，这个缝就不存在了：消息只需要「到过」，
-     * 什么时候到都行。
+     * ## 为什么「收到消息就放行」和「onPause 放行」两个都要
+     * 不同 ROM 抓快照的时机不一样：
+     * - 荣耀 MagicOS 在 `onPause` **之前**就抓走了（实测 MagicOS 11 / Android 17）。
+     *   只在 onPause 放行 → 抓图那一刻许可还是 false → **必然白卡**。
+     *   所以消息一到就得放行，不能等。
+     * - 也有 ROM 在 Activity 进入 STOPPED 时才抓，消息可能比 onPause 晚到，
+     *   所以 onPause 里再兜一次。
+     * 两条路径都只在「遮罩已就绪」时成立，安全底线不变。
      *
      * ## 迟到的放行怎么防
      * 靠 Dart 侧 `if (!mounted) return`（遮罩被撤掉时 State 已 dispose，
      * pending 的 async 自己就退出了）+ 消息里的单调序号 [lastMaskSeq]。
-     * 序号认的是「哪一次遮罩」，比「此刻在不在前台」精确得多。
+     * 序号认的是「哪一次遮罩」，比「此刻在不在前台」精确。
+     * 早期版本用 `foreground` 布尔做守卫，结果在「全面屏手势缓慢返回」时
+     * 把合法放行误判成死信丢掉，导致每次返回都白卡 —— 已废弃。
      */
     private fun setRecentsScreenshotAllowed(allowed: Boolean) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
@@ -270,17 +271,22 @@ class MainActivity : FlutterFragmentActivity() {
                     applySecureFlag()
                     result.success(true)
                 }
-                // Dart 侧确认「遮罩那一帧已经画完」——**只置状态，不做任何动作**。
-                // 真正的放行在 `onPause` 里，见 setRecentsScreenshotAllowed 的说明。
+                // Dart 侧确认「遮罩那一帧已经画完」——**立刻放行**，不等 onPause。
                 //
-                // 带 `seq` 是为了丢弃上一轮的迟到消息：Dart 每次新建遮罩 State
-                // 都会带一个自增序号，这里只认比 [lastMaskSeq] 大的。
-                // 比 `foreground` 布尔精确 —— 它认「哪一次遮罩」，不是「此刻在不在前台」。
+                // 为什么不能等 onPause：荣耀 MagicOS 在 onPause **之前**就把最近任务
+                // 缩略图抓走了。等 onPause 再放行，那个时刻许可还是 false → 必然白卡。
+                // （实测：MagicOS 11 / Android 17 上 hotfix4 全白卡，就是这个原因。）
+                // onPause 里还有一次 [releaseWhenReady] 兜底，覆盖消息比 onPause 晚到的 ROM。
+                //
+                // 迟到消息靠 `seq` 丢弃：Dart 每次新建遮罩 State 都会带一个自增序号，
+                // 这里只认比 [lastMaskSeq] 大的。比 `foreground` 布尔精确 ——
+                // 它认「哪一次遮罩」，不是「此刻在不在前台」，因此不会误杀合法放行。
                 "maskReady" -> {
                     val seq = call.argument<Int>("seq") ?: 0
                     if (seq > lastMaskSeq) {
                         lastMaskSeq = seq
                         maskReady = true
+                        if (privacyEnabled) setRecentsScreenshotAllowed(true)
                         result.success(true)
                     } else {
                         result.success(false) // 上一轮的死信，丢弃
