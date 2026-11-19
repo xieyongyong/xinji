@@ -1,7 +1,13 @@
 package com.xinji.payslip
 
+import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
+import android.view.SurfaceView
+import android.view.View
 import android.view.ViewGroup
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -28,26 +34,33 @@ class MainActivity : FlutterFragmentActivity() {
     @Volatile
     private var privacyEnabled = true
 
-    // 预取的应用图标：onPause 里现读 PackageManager 会拖慢遮罩上屏，
-    // 而遮罩必须赶在系统抓「最近任务」快照之前进窗口。
+    // 预取的应用图标：onPause 里现读 PackageManager 会拖慢遮罩上屏。
     private var appIconDrawable: Drawable? = null
 
-    // 当前挂着的遮罩。非空表示正在遮（onPause 加上、onResume 移除）。
+    // 常驻遮罩，平时 alpha = 0。见下方 showMask 的注释：
+    // 临时 addView 的渲染链太长，赶不上系统的最近任务抓图。
     private var maskView: PrivacyMaskView? = null
 
-    /**
-     * 在 FlutterView 之上盖一层原生遮罩。
-     *
-     * 必须同步、直接在 UI 线程 addView：这是唯一能赶在系统拍照前生效的路径。
-     * 不透明度和绘制成本都要压到最低（见 [PrivacyMaskView] 的说明）。
-     */
-    private fun showPrivacyMask() {
-        if (!privacyEnabled) return
-        if (isFinishing || isDestroyed) return
+    // 最近一张「当前画面」的缩小模糊图。模糊之后新旧几乎看不出差别，
+    // 所以哪怕用的是上一次的缓存，观感也不受影响 —— 但一定不是一块纯色板。
+    private var lastSnapshot: Bitmap? = null
+
+    // PixelCopy 是异步的，禁止并发抓，否则会白白多申请几张 Bitmap。
+    private var capturing = false
+
+    // onResume 后补抓快照的延时任务，重复 onResume 时先撤掉旧的，避免堆积。
+    private val snapshotTask = Runnable { refreshSnapshot() }
+
+    /** 首次进入前台时把遮罩挂上，之后一直常驻，只切 alpha。 */
+    private fun attachMaskIfNeeded() {
         if (maskView != null) return
         val root = findViewById<ViewGroup>(android.R.id.content) ?: return
         val v = PrivacyMaskView(this)
         v.bindIcon(appIconDrawable)
+        v.bindSnapshot(lastSnapshot)
+        v.alpha = 0f
+        v.isClickable = false
+        v.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         try {
             root.addView(
                 v,
@@ -62,22 +75,140 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
-    private fun hidePrivacyMask() {
+    /**
+     * 亮遮罩。
+     *
+     * 常驻 View 只改 alpha：少了 attach + measure + layout，只剩一次 draw，
+     * 再配合 [onUserLeaveHint] 提前调用，才能抢在系统抓最近任务快照之前上屏。
+     * 这里刻意不用动画 —— 动画要跑好几帧，正好错过抓图窗口。
+     */
+    private fun showMask() {
+        if (!privacyEnabled) return
+        if (isFinishing || isDestroyed) return
+        var v = maskView
+        if (v == null) {
+            // 还没挂过（理论上不会发生，onResume 已确保挂载），补救一次
+            attachMaskIfNeeded()
+            v = maskView
+        }
+        val view = v ?: return
+        view.isClickable = true
+        view.alpha = 1f
+    }
+
+    private fun hideMask() {
         val v = maskView ?: return
-        maskView = null
-        (v.parent as? ViewGroup)?.removeView(v)
+        v.alpha = 0f
+        v.isClickable = false
+    }
+
+    /**
+     * 抓一张当前画面 → 模糊 → 存成遮罩底图。
+     *
+     * 必须用 PixelCopy 直接读 Flutter SurfaceView 的 buffer：
+     * SurfaceView 的内容不在 View.draw 里，decorView.draw() 只能画出一个洞，
+     * 拿不到真实的界面像素。
+     */
+    private fun refreshSnapshot() {
+        if (!privacyEnabled || isFinishing || isDestroyed) return
+        if (capturing) return
+        val sv = findFlutterSurfaceView() ?: return
+        val vw = sv.width
+        val vh = sv.height
+        if (vw <= 0 || vh <= 0) return
+
+        // 降到 1/6 宽再放大铺满：放大本身就是一次强低通滤波，
+        // 模糊成本也降到几乎为零（小图 2~4ms）。
+        val tw = (vw / 6).coerceIn(48, 360)
+        val th = (tw * vh / vw).coerceAtLeast(1)
+        val bmp = try {
+            Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
+        } catch (_: Throwable) {
+            return
+        }
+
+        capturing = true
+        try {
+            PixelCopy.request(
+                sv,
+                bmp,
+                { result ->
+                    capturing = false
+                    if (result == PixelCopy.SUCCESS && !isDestroyed) {
+                        ImageBlur.blur(bmp, 6)
+                        val old = lastSnapshot
+                        lastSnapshot = bmp
+                        maskView?.bindSnapshot(bmp)
+                        old?.takeIf { it !== bmp }?.recycle()
+                    } else {
+                        bmp.recycle()
+                    }
+                },
+                Handler(Looper.getMainLooper()),
+            )
+        } catch (_: Throwable) {
+            // 个别机型 / Surface 已失效时 PixelCopy 会抛，直接放弃这一轮，
+            // 遮罩继续用上一张缓存图或渐变兜底。
+            capturing = false
+            bmp.recycle()
+        }
+    }
+
+    /** Flutter 默认用 FlutterSurfaceView 渲染，它的子 View 里就是这个 SurfaceView。 */
+    private fun findFlutterSurfaceView(): SurfaceView? {
+        val root = window?.decorView as? ViewGroup ?: return null
+        return findSurface(root)
+    }
+
+    private fun findSurface(v: View): SurfaceView? {
+        if (v is SurfaceView && v.visibility == View.VISIBLE) return v
+        if (v is ViewGroup) {
+            for (i in 0 until v.childCount) {
+                val hit = findSurface(v.getChildAt(i))
+                if (hit != null) return hit
+            }
+        }
+        return null
+    }
+
+    /**
+     * 用户主动离开 App（按 Home、从最近任务切走、启动别的应用）时先回调这里，
+     * 比 onPause 早 50~100ms —— 这一段时间就是留给遮罩上屏的。
+     * 这是整套方案能不能「稳定生效」的关键。
+     */
+    override fun onUserLeaveHint() {
+        if (!isFinishing) {
+            showMask()
+            refreshSnapshot()
+        }
+        super.onUserLeaveHint()
     }
 
     override fun onPause() {
-        // 放在 super 之前：super 会通知 Fragment/Flutter 走一整套暂停流程，
-        // 先 addView 能把这几十毫秒省下来，留给系统拍照的窗口更早被堵住。
-        showPrivacyMask()
+        // 兜底：锁屏、按返回退出等场景不触发 onUserLeaveHint。
+        // 此时贴的可能是上一张缓存图，糊掉之后看不出新旧，不影响观感。
+        showMask()
+        refreshSnapshot()
         super.onPause()
     }
 
     override fun onResume() {
-        hidePrivacyMask()
         super.onResume()
+        attachMaskIfNeeded()
+        hideMask()
+        // 空闲后补一张新快照，供下一次离开时使用。800ms 是为了让首帧和
+        // 页面动画都停下来，免得抓到一张过渡中的画面。
+        val decor = window?.decorView ?: return
+        decor.removeCallbacks(snapshotTask)
+        decor.postDelayed(snapshotTask, 800)
+    }
+
+    override fun onDestroy() {
+        window?.decorView?.removeCallbacks(snapshotTask)
+        lastSnapshot?.recycle()
+        lastSnapshot = null
+        maskView = null
+        super.onDestroy()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,14 +237,14 @@ class MainActivity : FlutterFragmentActivity() {
         val messenger = flutterEngine.dartExecutor.binaryMessenger
 
         // 后台隐私保护开关：Dart 侧启动时、以及设置页切换时把 privacyMask 推过来。
-        // 遮罩本身是原生 View（见 PrivacyMaskView），在 onPause 里同步挂上，
-        // 不再需要把图标光栅化成 PNG 传给 Dart —— 那边已经不画遮罩了。
+        // 遮罩本身是常驻的原生 View（见 PrivacyMaskView），这里只同步开关状态，
+        // 不需要把图标光栅化成 PNG 传给 Dart —— 那边已经不画遮罩了。
         MethodChannel(messenger, PRIVACY_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setEnabled" -> {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
                     // 关掉开关时如果正遮着，立刻撤掉，别等下一次 onResume
-                    if (!privacyEnabled) hidePrivacyMask()
+                    if (!privacyEnabled) hideMask()
                     result.success(true)
                 }
                 else -> result.notImplemented()

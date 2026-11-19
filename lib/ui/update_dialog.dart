@@ -97,38 +97,45 @@ Future<bool> showUpdateDialog(
                   ),
                 ),
                 const SizedBox(height: 8),
-                // 线路选择：收进下拉框，只显示当前选中项，不再平铺四条撑高弹窗。
-                // StatefulBuilder 只重建这一小块；改线路即时落盘，下次记住。
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: kSurfaceAlt,
+                // 线路选择：一行高度，点击弹出与 App 同风格的选择卡片。
+                //
+                // 不用 DropdownButton：它的弹出菜单是 Material 默认的白底直角 +
+                // 系统阴影，宽度位置都由它自己算，和弹窗的圆角浅色卡片不是一套皮，
+                // 视觉上很突兀。改成整行可点 + 自绘圆角单选卡片。
+                Material(
+                  color: kSurfaceAlt,
+                  borderRadius: BorderRadius.circular(10),
+                  child: InkWell(
                     borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.alt_route, size: 15, color: kTextSecondary),
-                      const SizedBox(width: 8),
-                      Text('下载线路', style: TextStyle(fontSize: 12, color: kTextSecondary)),
-                      const Spacer(),
-                      DropdownButton<String>(
-                        value: lineId,
-                        isDense: true,
-                        underline: const SizedBox.shrink(),
-                        items: [
-                          for (final l in UpdateChecker.lines)
-                            DropdownMenuItem<String>(
-                              value: l.id,
-                              child: Text(l.label, style: const TextStyle(fontSize: 12.5)),
+                    onTap: () async {
+                      final picked = await _pickUpdateLine(dialogCtx, lineId);
+                      if (picked == null || picked == lineId) return;
+                      setDialogState(() => lineId = picked);
+                      await UpdateChecker.setPreferredLine(picked);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+                      child: Row(
+                        children: [
+                          Icon(Icons.alt_route, size: 15, color: kTextSecondary),
+                          const SizedBox(width: 8),
+                          Text('下载线路',
+                              style: TextStyle(fontSize: 12, color: kTextSecondary)),
+                          const Spacer(),
+                          Text(
+                            _lineLabel(lineId),
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: kTextPrimary,
                             ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(Icons.keyboard_arrow_down_rounded,
+                              size: 18, color: kTextSecondary),
                         ],
-                        onChanged: (v) async {
-                          if (v == null || v == lineId) return;
-                          setDialogState(() => lineId = v);
-                          await UpdateChecker.setPreferredLine(v);
-                        },
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ],
@@ -206,4 +213,90 @@ Future<bool> showUpdateDialog(
         duration: const Duration(seconds: 4));
   }
   return true;
+}
+
+/// 线路 id → 展示名。找不到时退回 id 本身，不至于显示空白。
+String _lineLabel(String id) {
+  for (final l in UpdateChecker.lines) {
+    if (l.id == id) return l.label;
+  }
+  return id;
+}
+
+/// 线路选择卡片。
+///
+/// 刻意不用 DropdownButton / PopupMenuButton：那两个的菜单是 Material 默认样式，
+/// 白底直角加系统阴影，和本 App 的圆角浅色弹窗不是一套皮肤。
+/// 这里用普通 AlertDialog + 自绘单选行，圆角、字号、主题色都和设置页一致。
+Future<String?> _pickUpdateLine(BuildContext context, String current) {
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
+      contentPadding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      title: const Text('下载线路', style: TextStyle(fontSize: 15)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final l in UpdateChecker.lines)
+            _LineTile(
+              label: l.label,
+              selected: l.id == current,
+              onTap: () => Navigator.pop(ctx, l.id),
+            ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('取消', style: TextStyle(fontSize: 13)),
+        ),
+      ],
+    ),
+  );
+}
+
+class _LineTile extends StatelessWidget {
+  const _LineTile({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        child: Row(
+          children: [
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              size: 17,
+              // 必须显式给色：图标默认取 IconTheme，深色主题下会和背景糊在一起
+              color: selected ? kIncomeFg : kTextHint,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                  color: selected ? kTextPrimary : kTextBody,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
