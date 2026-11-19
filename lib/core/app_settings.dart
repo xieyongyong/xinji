@@ -19,6 +19,7 @@ class AppSettings extends ChangeNotifier {
   static const _kPrivacyMask = 'privacy_mask';
   static const _kLockDelay = 'lock_delay_seconds';
   static const _kHideAmounts = 'hide_amounts';
+  static const _kFloatingLock = 'floating_lock';
   static const _kCloudAuto = 'cloud_auto_backup';
   static const _kCloudAutoDay = 'cloud_auto_backup_day';
   static const _kCloudAutoLast = 'cloud_auto_backup_last_at';
@@ -60,6 +61,10 @@ class AppSettings extends ChangeNotifier {
   /// 金额打码：把界面上的金额显示成 ¥****（不影响导出和录入）
   bool hideAmounts = false;
 
+  /// 应用内悬浮锁定按钮：半透明、可拖动、吸附屏幕两侧，点一下立即上锁。
+  /// 只在启用应用锁时才有意义。默认关。
+  bool floatingLock = false;
+
   /// 每月自动备份到云盘
   bool cloudAutoBackup = false;
 
@@ -100,6 +105,7 @@ class AppSettings extends ChangeNotifier {
     lockDelaySeconds = sp.getInt(_kLockDelay) ?? 30;
     hideAmounts = sp.getBool(_kHideAmounts) ?? false;
     kMaskAmounts = hideAmounts;
+    floatingLock = sp.getBool(_kFloatingLock) ?? false;
     cloudAutoBackup = sp.getBool(_kCloudAuto) ?? false;
     cloudAutoBackupDay = normalizeBackupDay(sp.getInt(_kCloudAutoDay) ?? 1);
     cloudAutoBackupLastAt = sp.getInt(_kCloudAutoLast) ?? 0;
@@ -151,6 +157,13 @@ class AppSettings extends ChangeNotifier {
     await sp.setBool(_kPrivacyMask, v);
     // 实时同步给原生：开启则切后台加 FLAG_SECURE，关闭则不加。
     await PrivacyChannel.setEnabled(v);
+  }
+
+  Future<void> setFloatingLock(bool v) async {
+    floatingLock = v;
+    notifyListeners();
+    final sp = await SharedPreferences.getInstance();
+    await sp.setBool(_kFloatingLock, v);
   }
 
   Future<void> setLockDelay(int seconds) async {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/app_update.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 
 /// 发现新版本时的弹窗。
 ///
@@ -23,6 +24,8 @@ Future<bool> showUpdateDialog(
   // 线路选择放在弹窗内，默认读用户上次选的（首次是 gh-proxy.com）
   String lineId = await UpdateChecker.preferredLineId();
   if (!context.mounted) return false;
+  // 更新日志滚动条控制器：函数级持有，弹窗关闭后统一 dispose。
+  final scrollCtrl = ScrollController();
 
   final choice = await showDialog<String>(
     context: context,
@@ -37,43 +40,63 @@ Future<bool> showUpdateDialog(
           ),
         ],
       ),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '当前 $currentVersion  →  最新 ${release.version}'
-                '${release.dateLabel.isEmpty ? '' : '（${release.dateLabel}）'}',
-                style: TextStyle(fontSize: 12.5, color: kTextSecondary),
-              ),
-              if (release.notes.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: kSurfaceAlt,
-                    borderRadius: BorderRadius.circular(8),
+      // 上面：限高的滚动区（版本说明 + 更新日志），带常驻侧边滚动条，不占满全屏。
+      // 下面：固定的线路选择区，不随内容滚动，一点就选，不用拉到最下。
+      content: StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          return SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(dialogCtx).size.height * 0.42,
                   ),
-                  child: Text(
-                    release.notes,
-                    style: const TextStyle(fontSize: 12, height: 1.6),
+                  child: Scrollbar(
+                    controller: scrollCtrl,
+                    thumbVisibility: true,
+                    child: SingleChildScrollView(
+                      controller: scrollCtrl,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            '当前 $currentVersion  →  最新 ${release.version}'
+                            '${release.dateLabel.isEmpty ? '' : '（${release.dateLabel}）'}',
+                            style: TextStyle(fontSize: 12.5, color: kTextSecondary),
+                          ),
+                          if (release.notes.isNotEmpty) ...[
+                            const SizedBox(height: 12),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: kSurfaceAlt,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                release.notes,
+                                style: const TextStyle(fontSize: 12, height: 1.6),
+                              ),
+                            ),
+                          ],
+                          const SizedBox(height: 12),
+                          Text(
+                            '点「立即更新」后会在后台下载，期间可以照常使用 App；'
+                            '下载完在首页点一下即可安装，数据原样保留。',
+                            style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
-              ],
-              const SizedBox(height: 12),
-              Text(
-                '点「立即更新」后会在后台下载，期间可以照常使用 App；'
-                '下载完在首页点一下即可安装，数据原样保留。',
-                style: TextStyle(fontSize: 11.5, height: 1.6, color: kTextHint),
-              ),
-              const SizedBox(height: 12),
-              // 线路选择：StatefulBuilder 只重建这一小块，不动外面的 release 文案
-              StatefulBuilder(
-                builder: (dialogCtx, setDialogState) => Container(
+                const SizedBox(height: 12),
+                // 线路选择：固定在滚动区下方，StatefulBuilder 只重建这一小块
+                Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                   decoration: BoxDecoration(
                     color: kSurfaceAlt,
@@ -124,10 +147,10 @@ Future<bool> showUpdateDialog(
                     ],
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
+              ],
+            ),
+          );
+        },
       ),
       actions: [
         TextButton(
@@ -145,6 +168,7 @@ Future<bool> showUpdateDialog(
       ],
     ),
   );
+  scrollCtrl.dispose();
 
   if (choice == null || choice == 'later') {
     if (auto) await UpdateChecker.skipVersion(release.version);
@@ -157,9 +181,7 @@ Future<bool> showUpdateDialog(
       return true;
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('没能打开浏览器：$e')),
-        );
+        showTip(context, '没能打开浏览器：$e');
       }
       return false;
     }
@@ -169,20 +191,14 @@ Future<bool> showUpdateDialog(
     await UpdateDownloadController.instance.start(release, preferredLine: lineId);
   } catch (e) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('没能启动后台下载：$e')),
-      );
+      showTip(context, '没能启动后台下载：$e');
     }
     return false;
   }
 
   if (context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('已在后台下载，可以继续用 App；下载完在首页点「安装」'),
-        duration: Duration(seconds: 4),
-      ),
-    );
+    showTip(context, '已在后台下载，可以继续用 App；下载完在首页点「安装」',
+        duration: const Duration(seconds: 4));
   }
   return true;
 }

@@ -13,7 +13,9 @@ import '../data/salary_template.dart';
 import '../ocr/merge_engine.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 import 'widgets/image_viewer.dart';
+import 'widgets/info_hint.dart';
 import 'widgets/period_picker.dart';
 
 /// 校对 / 新建 / 编辑三合一页面。
@@ -492,6 +494,58 @@ class _ReviewPageState extends State<ReviewPage> {
     }
   }
 
+  /// 侧滑删除明细项：先二次确认，避免误删。
+  Future<void> _deleteItem(int index) async {
+    final name = _items[index].name.isEmpty ? '这项' : _items[index].name;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除这一项？'),
+        content: Text('$name 将从明细里移除。', style: const TextStyle(height: 1.6)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: kUp),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() {
+      _items.removeAt(index);
+      _normalizeOrder();
+      _applyPerfFormula();
+    });
+  }
+
+  /// 侧滑删除信息项。
+  Future<void> _deleteInfo(int index) async {
+    final name = _infos[index].name.isEmpty ? '这项' : _infos[index].name;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除这一项？'),
+        content: Text('$name 将从信息项里移除。', style: const TextStyle(height: 1.6)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: kUp),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    setState(() => _infos.removeAt(index));
+  }
+
   Future<void> _editItem(int index) async {
     final draft = _items[index];
     final result = await showDialog<_ItemEditResult>(
@@ -519,9 +573,7 @@ class _ReviewPageState extends State<ReviewPage> {
     }
 
     setState(() {
-      if (result.deleted) {
-        _items.removeAt(index);
-      } else if (result.draft != null) {
+      if (result.draft != null) {
         _items[index] = result.draft!;
       }
       // 改了名字/类别之后位置可能变（比如收入改成扣款），
@@ -598,9 +650,7 @@ class _ReviewPageState extends State<ReviewPage> {
     );
     if (result == null) return;
     setState(() {
-      if (result.deleted) {
-        _infos.removeAt(index);
-      } else if (result.info != null) {
+      if (result.info != null) {
         _infos[index] = result.info!;
       }
     });
@@ -708,7 +758,7 @@ class _ReviewPageState extends State<ReviewPage> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    showTip(context, msg);
   }
 
   void _viewImage(int index) {
@@ -1233,7 +1283,19 @@ class _ReviewPageState extends State<ReviewPage> {
                 ),
               ),
             ],
-            const SizedBox(width: 6),
+            const SizedBox(width: 4),
+            // 删除移到列表里操作，弹框只留取消/确定
+            SizedBox(
+              width: 26,
+              height: 26,
+              child: IconButton(
+                icon: Icon(Icons.delete_outline, size: 15, color: kTextFaint),
+                tooltip: '删除',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                onPressed: () => _deleteItem(index),
+              ),
+            ),
             Icon(Icons.edit_outlined, size: 14, color: kTextFaint),
           ],
         ),
@@ -1347,7 +1409,18 @@ class _ReviewPageState extends State<ReviewPage> {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 4),
+                    SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: IconButton(
+                        icon: Icon(Icons.delete_outline, size: 15, color: kTextFaint),
+                        tooltip: '删除',
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        onPressed: () => _deleteInfo(i),
+                      ),
+                    ),
                     Icon(Icons.edit_outlined, size: 14, color: kTextFaint),
                   ],
                 ),
@@ -1584,13 +1657,6 @@ class _InfoEditDialogState extends State<_InfoEditDialog> {
         ],
       ),
       actions: [
-        if (!widget.isNew)
-          TextButton(
-            onPressed: () =>
-                Navigator.of(context).pop(_InfoEditResult(deleted: true)),
-            style: TextButton.styleFrom(foregroundColor: kUp),
-            child: const Text('删除'),
-          ),
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
         FilledButton(onPressed: _confirm, child: const Text('确定')),
       ],
@@ -1765,14 +1831,16 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
             ),
           ),
           if (_valueType == kValueDerived) ...[
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '推算值：由公式反推得到，能看到但不计入合计\n'
-                '（基本绩效 = 绩效工资 ÷ 绩效系数）',
-                style: TextStyle(fontSize: 11, height: 1.5, color: kTextHint),
-              ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const InfoHint(
+                  title: '推算值',
+                  text: '由公式反推得到，能看到但不计入合计。\n'
+                      '例如「基本绩效 = 绩效工资 ÷ 绩效系数」。',
+                ),
+                Text('推算值说明', style: TextStyle(fontSize: 11, color: kTextHint)),
+              ],
             ),
           ],
           if (!widget.isNew) ...[
@@ -1811,13 +1879,6 @@ class _ItemEditDialogState extends State<_ItemEditDialog> {
         ),
       ),
       actions: [
-        if (!widget.isNew)
-          TextButton(
-            onPressed: () =>
-                Navigator.of(context).pop(_ItemEditResult(deleted: true)),
-            style: TextButton.styleFrom(foregroundColor: kUp),
-            child: const Text('删除'),
-          ),
         TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('取消')),
         FilledButton(onPressed: _confirm, child: const Text('确定')),
       ],

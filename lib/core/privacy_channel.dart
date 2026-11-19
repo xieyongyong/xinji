@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/services.dart';
 
 /// 后台隐私保护：把「后台隐藏内容」开关同步给 Android 原生。
@@ -12,6 +14,10 @@ import 'package:flutter/services.dart';
 class PrivacyChannel {
   static const MethodChannel _channel = MethodChannel('xinji/privacy');
 
+  /// 应用图标的 PNG 字节，启动时预取缓存。
+  /// 遮罩在切后台瞬间绘制，那时 engine 即将停帧，不能现读，必须提前备好。
+  static Uint8List? appIconBytes;
+
   /// 把开关状态推给原生。启动时和设置变更时各调用一次。
   static Future<void> setEnabled(bool enabled) async {
     try {
@@ -19,5 +25,13 @@ class PrivacyChannel {
     } catch (_) {
       // 非 Android 平台或通道未注册时静默忽略，不影响 UI。
     }
+  }
+
+  /// 预取应用图标（PNG 字节）。失败则保持 null，遮罩会退化成纯图标。
+  static Future<void> preloadAppIcon() async {
+    try {
+      final bytes = await _channel.invokeMethod<Uint8List>('appIcon');
+      if (bytes != null && bytes.isNotEmpty) appIconBytes = bytes;
+    } catch (_) {}
   }
 }

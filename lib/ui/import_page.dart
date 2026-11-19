@@ -11,6 +11,7 @@ import '../ocr/ocr_service.dart';
 import '../state/app_state.dart';
 import 'review_page.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 import 'widgets/period_picker.dart';
 
 /// 导入入口：选图 / 拍照 / 手动
@@ -86,7 +87,7 @@ class _ImportPageState extends State<ImportPage> {
   void _error(String msg) {
     if (!mounted) return;
     setState(() => _busy = false);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    showTip(context, msg);
   }
 
   /// 收图 -> 压缩入库 -> 逐张 OCR -> 合并 -> 进校对页

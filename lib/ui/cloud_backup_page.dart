@@ -8,6 +8,7 @@ import '../core/app_settings.dart';
 import '../data/db.dart';
 import '../state/app_state.dart';
 import 'theme.dart';
+import 'widgets/app_tip.dart';
 
 /// 云盘备份页（WebDAV）。默认关闭：只有用户主动填了服务器才会上传任何数据。
 class CloudBackupPage extends StatefulWidget {
@@ -237,7 +238,7 @@ class _CloudBackupPageState extends State<CloudBackupPage> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    showTip(context, msg);
   }
 
   @override

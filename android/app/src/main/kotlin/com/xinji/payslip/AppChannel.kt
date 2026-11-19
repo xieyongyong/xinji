@@ -7,10 +7,14 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
+import java.io.FileInputStream
 
 /**
  * `xinji/app` 通道：App 自身的信息、更新下载、以及"打开外部链接"这个退路。
@@ -100,6 +104,23 @@ object AppChannel {
                 result.success(UpdateCache.clearAll(context.applicationContext))
             }
 
+            "saveToDownloads" -> {
+                // 把 App 私有目录里生成好的备份文件复制到公共 Download。
+                // 安卓 10+ 分区存储下 Dart 拿不到公共目录，必须走 MediaStore。
+                val srcPath = call.argument<String>("srcPath")
+                val displayName = call.argument<String>("displayName")
+                if (srcPath.isNullOrBlank() || displayName.isNullOrBlank()) {
+                    result.error("app_bad_args", "缺少源文件路径或文件名", null)
+                    return
+                }
+                try {
+                    val shown = saveToDownloads(context, srcPath, displayName)
+                    result.success(shown)
+                } catch (t: Throwable) {
+                    result.error("app_save_failed", t.message ?: t.toString(), null)
+                }
+            }
+
             "downloadStatus" -> result.success(
                 UpdateDownloadController.toMap(UpdateDownloadController.state)
             )
@@ -135,5 +156,38 @@ object AppChannel {
         } catch (_: Throwable) {
             "0.0.0"
         }
+    }
+
+    /**
+     * 把私有目录里的备份文件复制到公共 Download，返回展示给用户看的路径。
+     * minSdk 29，直接用 MediaStore.Downloads，不需要存储权限、不需要 SAF。
+     */
+    private fun saveToDownloads(context: Context, srcPath: String, displayName: String): String {
+        val src = File(srcPath)
+        if (!src.exists()) throw IllegalStateException("备份文件不存在")
+        val mime = if (displayName.endsWith(".xbk", true)) {
+            "application/octet-stream"
+        } else {
+            "application/zip"
+        }
+        val values = android.content.ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+        }
+        val resolver = context.contentResolver
+        val uri: Uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("无法在下载目录创建文件")
+        try {
+            resolver.openOutputStream(uri).use { out ->
+                if (out == null) throw IllegalStateException("无法打开输出流")
+                FileInputStream(src).use { input -> input.copyTo(out) }
+            }
+        } catch (t: Throwable) {
+            // 写入失败就删掉刚插入的空记录，别在 Download 里留垃圾
+            try { resolver.delete(uri, null, null) } catch (_: Throwable) {}
+            throw t
+        }
+        return "Download/$displayName"
     }
 }
