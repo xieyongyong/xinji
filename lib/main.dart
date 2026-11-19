@@ -31,9 +31,9 @@ Future<void> main() async {
   await lock.load();
   await appState.init();
 
-  // 后台隐私保护：遮罩由原生 View 画（PrivacyMaskView），挂在 FlutterView 之上。
-  // 原生在 onPause 里同步 addView，赶得上系统抓「最近任务」快照；
-  // Flutter 侧只负责把开关值同步过去。
+  // 后台隐私保护：真正的保障是原生的 FLAG_SECURE（切后台给窗口加、回前台清），
+  // 系统抓图时直接出黑帧，不依赖 App 渲染任何一帧。
+  // Flutter 这层不需要画遮罩，只负责把开关值同步过去。
   await PrivacyChannel.setEnabled(settings.privacyMask);
 
   runApp(XinJiApp(state: appState, lock: lock, settings: settings));

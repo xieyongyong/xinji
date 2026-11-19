@@ -9,6 +9,7 @@ import android.view.PixelCopy
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -34,17 +35,20 @@ class MainActivity : FlutterFragmentActivity() {
     @Volatile
     private var privacyEnabled = true
 
+    // 当前是否在前台。FLAG_SECURE 只在后台加、回到前台立刻清。
+    private var foreground = true
+
     // 预取的应用图标：onPause 里现读 PackageManager 会拖慢遮罩上屏。
     private var appIconDrawable: Drawable? = null
 
-    // 遮罩只有一个实现：常驻的普通 View，平时 alpha = 0。
+    // 遮罩 View：真正的保底是 [applyPrivacyFlag] 的 FLAG_SECURE（系统级，100%）。
+    // 这一层只是「万一某些 ROM 忽略 flag」时的视觉补充，平时 alpha = 0。
     //
-    // 这里曾经并行挂过一个 ZOrderOnTop 的 SurfaceView，用 SurfaceControl 事务切
-    // layer alpha 来实现「零等待」。它的 buffer 里必须一直放着不透明遮罩内容，
+    // 历史教训：这里曾经并行挂过一个 ZOrderOnTop 的 SurfaceView，用 SurfaceControl
+    // 事务切 layer alpha 来实现「零等待」。它的 buffer 里必须一直放着不透明遮罩内容，
     // 一旦那层 layer 的 alpha 被系统复位（surface 重建、窗口 relayout、从后台回来
     // 都会发生），不透明内容就直接盖在前台界面上 —— 用户看到的是「正在用着 App，
-    // 界面突然被糊住」，等于把 App 用废了。而它换来的后台命中率也没提升
-    // （全面屏上滑回桌面依旧不生效），收益为负，整段已移除。
+    // 界面突然被糊住」，等于把 App 用废了。而且它换来的后台命中率也没提升。
     private var maskView: PrivacyMaskView? = null
 
     // 最近一张「当前画面」的缩小模糊图。模糊之后新旧几乎看不出差别，
@@ -56,6 +60,28 @@ class MainActivity : FlutterFragmentActivity() {
 
     // onResume 后补抓快照的延时任务，重复 onResume 时先撤掉旧的，避免堆积。
     private val snapshotTask = Runnable { refreshSnapshot() }
+
+    /**
+     * 后台隐私的**唯一可靠手段**，也是 v2.7.0 用的那个。
+     *
+     * `FLAG_SECURE` 是窗口属性：系统在抓最近任务缩略图、截屏、录屏时自己判断，
+     * 带这个 flag 的窗口直接产出黑帧。它**不依赖 App 渲染任何一帧**，
+     * 所以上滑手势、返回键、Home、锁屏，任何一条路径都拦得住 —— 这一点是
+     * 「App 自己画遮罩」永远做不到的（画遮罩要等 vsync + 合成，系统那条路抓得更早，
+     * 前前后后试了四种原生方案都被证明抢不到时机）。
+     *
+     * 只在后台加、回到前台清：前台的截屏、录屏、投屏全部正常。
+     * 代价是最近任务里显示的是**空白卡片**（部分 ROM 上是一条白/黑卡片），
+     * 看不到画面 —— 这是系统行为，无法改成「漂亮的模糊」。
+     */
+    private fun applyPrivacyFlag() {
+        val flag = WindowManager.LayoutParams.FLAG_SECURE
+        if (!foreground && privacyEnabled) {
+            window.addFlags(flag)
+        } else {
+            window.clearFlags(flag)
+        }
+    }
 
     /** 首次进入前台时把遮罩挂上，之后一直常驻，只在进出后台时切 alpha。 */
     private fun attachMaskIfNeeded() {
@@ -82,13 +108,12 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     /**
-     * 亮遮罩：只切 alpha。
+     * 亮遮罩：只是 FLAG_SECURE 之外的一层视觉补充。
      *
-     * 说清楚能力边界：改 alpha 要走「等 vsync → draw → 上传 buffer → 合成」，
-     * 系统抓最近任务快照基本都早于这一帧，所以**它不保证一定拍得到**。
-     * 之前试过的四条更激进的路（临时 addView / 常驻 View / lockCanvas 同步 post /
-     * SurfaceControl 事务切 layer alpha）要么同样失效，要么在前台把界面糊住，
-     * 都已回退。现在选择的是「宁可偶尔漏拍，也绝不影响正常使用」。
+     * 单独用它是不行的：改 alpha 要走「等 vsync → draw → 上传 buffer → 合成」，
+     * 系统抓最近任务快照基本都早于这一帧。这一点已经用四种原生方案验证过
+     * （临时 addView / 常驻 View / lockCanvas 同步 post / SurfaceControl 事务）。
+     * 所以真正的保障在 [applyPrivacyFlag]。
      */
     private fun showMask() {
         if (!privacyEnabled) return
@@ -192,25 +217,31 @@ class MainActivity : FlutterFragmentActivity() {
      *
      * 注意它**并不比 onPause 早**：两者是同一个 binder 消息（handlePauseActivity）
      * 里前后脚调用的，中间主线程不返回消息队列，一次 vsync 都等不到。
-     * 所以这里只是「顺手把遮罩亮起来」，真正的机会和限制都写在 [showMask] 的注释里。
+     * 所以这里只做一件有价值的事：趁 FLAG_SECURE 还没加、Surface 仍可读，
+     * 抓一张最新画面当遮罩底图。遮罩本身留到 onPause 再亮，避免误回调时在前台闪一下。
      */
     override fun onUserLeaveHint() {
-        if (!isFinishing) {
-            showMask()
-            refreshSnapshot()
-        }
+        if (!isFinishing) refreshSnapshot()
         super.onUserLeaveHint()
     }
 
     override fun onPause() {
-        // 兜底：锁屏、按返回退出等场景不触发 onUserLeaveHint。
-        // 此时贴的可能是上一张缓存图，糊掉之后看不出新旧，不影响观感。
+        // 先打 FLAG_SECURE，再走暂停流程。
+        // 这是整套方案里唯一真正关键的一步：它不渲染任何东西，只是给窗口做个标记，
+        // 系统抓快照时读到这个标记就直接出黑帧 —— 所以不存在「来不及」。
+        foreground = false
+        applyPrivacyFlag()
+
+        // 下面是视觉补充（万一某些 ROM 忽略 flag）。注意这里不再抓快照：
+        // flag 已经加上，PixelCopy 读自己的窗口会失败。
         showMask()
-        refreshSnapshot()
         super.onPause()
     }
 
     override fun onResume() {
+        // 回前台第一件事就是清 flag，否则截屏、录屏、投屏全是黑的。
+        foreground = true
+        applyPrivacyFlag()
         super.onResume()
         attachMaskIfNeeded()
         hideMask()
@@ -261,6 +292,8 @@ class MainActivity : FlutterFragmentActivity() {
             when (call.method) {
                 "setEnabled" -> {
                     privacyEnabled = call.argument<Boolean>("enabled") ?: true
+                    // 开关改动要立刻反映到窗口 flag 上（此调用永远发生在前台）
+                    applyPrivacyFlag()
                     // 关掉开关时如果正遮着，立刻撤掉，别等下一次 onResume
                     if (!privacyEnabled) hideMask()
                     result.success(true)

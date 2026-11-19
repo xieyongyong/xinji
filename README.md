@@ -223,31 +223,30 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
 4. **忘记 PIN 只能靠提示语**。提示语也忘了，就只剩「清除数据重装」。
 5. **APK 体积约 96MB**。PP-OCRv6 模型（25MB）、单套 arm64 的 ONNX Runtime + OpenCV native 库都在包里，这是完全离线的代价。只支持 64 位手机（现在的新机都是）。
 6. **检查更新走应用内下载**。仓库已公开，联网只用于读版本号和下载 APK，不带走任何工资数据。默认走 gh-proxy 加速线路（第三方能看到下载 IP，介意就在更新弹窗切官方直链）；下载完做 SHA-256 校验，确保拿到的是完整安装包。
-7. **后台隐藏：尽力而为的遮罩，开关可关**。
-   Android 的最近任务缩略图是系统在 `onPause` 之后自己拍的，不会等应用把遮罩画完。
-   这条链路上有几个都绕不过的坎：
+7. **后台隐藏：`FLAG_SECURE` + 视觉遮罩，开关可关**。
+   Android 的最近任务缩略图、截屏、录屏都是系统自己抓的，不会等应用把遮罩画完。
+   App 自己画遮罩这条路已经系统性验证过不可行：
    - Flutter 画遮罩要经过 platform channel → Dart isolate → build/layout/paint → 合成，
      Activity 不可见后 engine 还会暂停帧调度，那帧经常根本出不来；
-   - 原生普通 View 改完 alpha 还要等 vsync → measure/layout/draw → 上传 buffer → 合成，
-     至少一帧；而 `onUserLeaveHint` 并不比 `onPause` 早（两者是同一个 binder 消息里连续调用的），
-     指望「提前触发」是错的；
-   - 常驻 `SurfaceView` + `lockCanvas/unlockCanvasAndPost` 虽然同步提交 buffer，
-     但仍要等 SurfaceFlinger 一次合成，实测全面屏手势上滑回桌面依旧拍不到；
-   - 常驻 `SurfaceView` + `SurfaceControl.Transaction.setAlpha()` 切 layer alpha（buffer 里常放不透明遮罩）
-     是最后一种尝试，结果更糟：那层 layer 的 alpha 会在 surface 重建时被系统复位成 1，
-     不透明遮罩直接盖在前台界面上，App 完全没法用。
-   结论：**在 App 层这件事只能做到「尽力而为」**。现在的实现是一个常驻的普通 `PrivacyMaskView`，
-   平时 `alpha = 0`，`onPause` / `onUserLeaveHint` 时切到 1，回到前台或窗口拿到焦点时立刻压回 0
-   —— 取舍明确：**宁可偶尔漏拍，也绝不影响正常使用**。
-   遮罩底图仍是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
+   - 原生普通 View 改完 alpha 还要等 vsync → measure/layout/draw → 上传 buffer → 合成，至少一帧；
+     而 `onUserLeaveHint` 并不比 `onPause` 早（同一个 binder 消息里连续调用），指望「提前触发」是错的；
+   - 常驻 `SurfaceView` + `lockCanvas/unlockCanvasAndPost` 虽同步提交 buffer，但仍要等一次合成；
+   - 常驻 `SurfaceView` + `SurfaceControl.Transaction.setAlpha()`（buffer 里常放不透明遮罩）更糟：
+     layer 的 alpha 会在 surface 重建时被系统复位成 1，不透明遮罩直接盖住前台界面，App 没法用。
+
+   所以真正的保障是 **`FLAG_SECURE`**：`onPause` 给窗口 `addFlags`、`onResume` `clearFlags`。
+   它是窗口属性，系统抓图时自己判断，带 flag 的窗口直接出黑帧 —— **不依赖 App 渲染任何一帧**，
+   上滑手势、返回键、Home、锁屏任何路径都拦得住。只在后台加、回前台清，
+   所以**前台的截屏/录屏/投屏完全正常**。
+   代价是最近任务里显示的是**空白卡片**（部分 ROM 上是一条白/黑卡片），看不到画面 ——
+   这是系统行为，无法改成「漂亮的模糊」。**「好看」和「一定遮住」在 Android 上只能选一个。**
+
+   另有一个常驻的 `PrivacyMaskView`（普通 View，`alpha = 0`）做视觉补充，
+   防止个别 ROM 忽略 flag。它的底图是**当前画面的真实模糊**：用 `PixelCopy` 读 Flutter SurfaceView 的 buffer
    （SurfaceView 的内容不在 `View.draw` 里，`decorView.draw` 只能画出一个洞），
    缩到 1/6 宽后放大铺满 —— 放大本身即强低通滤波 —— 再叠一层轻微压暗 + 中央应用图标 + `visibility_off` 徽标。
-   抓不到图时（冷启动第一次离开）退化成深色底，至少不泄露内容；模糊之后新旧画面看不出差别，
-   所以用上一次的缓存图也不影响观感。全程纯代码绘制，模糊用自写的两轮 box blur，不引 RenderScript（涨包体）。
-   **不用原生 `FLAG_SECURE`**：它会让系统直接给空白卡片（上黑线+下白屏），观感上不好接受；
-   代价是没有系统级防截屏/录屏/投屏（前台数据仍受应用锁保护）。
-   如果确实需要 100% 不进最近任务，只能开 `FLAG_SECURE`（或 `setRecentsScreenshotEnabled(false)`），
-   两者都会让最近任务显示空白/图标卡片 —— 这是系统层面唯一可靠的办法。
+   抓不到图时（冷启动第一次离开）退化成深色底。模糊用自写的两轮 box blur，不引 RenderScript（涨包体）。
+   这一层是**纯尽力而为**，唯一的作用是「万一 flag 没生效，也别拍到明文」。
    悬浮锁定按钮只是**应用内**浮层（退出 App 即消失），不需要系统悬浮窗权限；
    渐变透明、无实线边框，大小 40–68dp 与贴边三档（贴边/微贴/不贴）在设置里的同一个弹框配置。
 8. **v2.0.0 起 minSdk 升到 29**。Android 10 及以下装不了；从旧版覆盖安装如失败，先导出备份再卸载重装。
