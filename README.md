@@ -238,9 +238,14 @@ GitHub Releases 在国内下载慢、偶尔失败，所以做了三层处理：
        代价是低版本用户**无法截屏/录屏/投屏**，这是明确的取舍。
      - Android 13+：`setRecentsScreenshotEnabled` 做成**动态闸门**，不是死值。
        平时（`onResume` **第一行** / 开关变更）置 `false` = 禁止系统拍快照，最坏结果只是白卡；
-       等遮罩那一帧画完（Dart 侧 `endOfFrame`，上限 200ms）才通过 `maskVisible` 通道置 `true`，
-       这时系统拍到的就是模糊画面。系统的判断发生在 Activity 进入 STOPPED 时，
-       晚于 Flutter 的 `inactive`，所以这个顺序成立；那一帧没赶上就保持禁止 → 白卡，**绝不会拍到明文**。
+       等遮罩那一帧**真正上屏**才通过 `maskVisible` 通道置 `true`，这时系统拍到的就是模糊画面。
+       注意 `endOfFrame` 只到 UI 线程 paint 完成，那一刻屏幕上的最后一帧**还是明文**，
+       只等一次就放行会拍到旧帧（实测仍会偶发明文）。所以要分三段等：
+       ① 第一次 `endOfFrame` —— 遮罩层交给 raster 线程；
+       ② 第二次 `endOfFrame` —— 保证第一次的栅格已经落盘；
+       ③ 再等 32ms（2 个 vsync）—— 给 SurfaceFlinger 合成上屏。
+       合计约 50ms，250ms 为硬上限，任一环超时继续保持「禁止拍」→ 白卡，**绝不会拍到明文**。
+       系统的判断发生在 Activity 进入 STOPPED 时，晚于 Flutter 的 `inactive`，所以这个顺序成立。
        两个必须遵守的约束：
        ① `onPause` 里不能重置这个标记 —— 那会把 Dart 刚打开的许可立刻关掉，退化成永远白卡；
        ② `maskVisible` 通道**必须带 `foreground` 守卫** —— 它是异步消息，上一轮离开时发出的那条
