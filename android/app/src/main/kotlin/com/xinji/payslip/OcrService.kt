@@ -19,6 +19,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import kotlin.math.abs
 
@@ -55,10 +56,40 @@ class OcrService : Service() {
         private const val TILE_OVERLAP = 120
         private const val MAX_WIDTH = 1600
         private const val TILE_QUALITY = 92
+
+        /** 多图并行上限：中低端机别开太多，3 路够把 3-4 张的等待砍半 */
+        private const val MAX_PARALLEL = 3
     }
 
-    private val worker = Executors.newSingleThreadExecutor()
-    private var ocrEngine: RapidOcrEngine? = null
+    // 固定线程池：并发跑多张图。单张图仍按 tiles 顺序识别，去重逻辑不变。
+    private val worker = Executors.newFixedThreadPool(MAX_PARALLEL)
+
+    // 分发线程：runRecognition 要往 worker 提交任务并等结果，自己不能占 worker
+    // 的线程，否则图数 ≥ 线程数时内层任务排不上队、外层又在 await，直接死锁。
+    private val dispatcher = Executors.newSingleThreadExecutor()
+
+    /**
+     * 各引擎的模型文件是同一批固定名（cache/xinji_ppocrv6_*），首次初始化
+     * 不能同时复制落盘，否则 rename 互相覆盖会失败。建实例+落模型串行化，
+     * 建好后各线程用自己的实例并行识别。
+     */
+    private val engineInitLock = Any()
+
+    /**
+     * 每个工作线程一份引擎实例。RapidOCR.run() 内部持有可变的 OpenCV Mat /
+     * ONNX session，多线程共享一个实例会互相踩状态；ThreadLocal 让每张图用
+     * 自己的引擎。代价是内存里多几份模型（v6_small 不大，3 路可接受）。
+     */
+    private val engineLocal = object : ThreadLocal<RapidOcrEngine>() {
+        override fun initialValue(): RapidOcrEngine = synchronized(engineInitLock) {
+            val created = RapidOcrEngine(this@OcrService) { line -> trace(line) }
+            created.ensureLoaded()
+            trace(created.loadInfo)
+            created
+        }
+    }
+
+    @Volatile
     private var selfTested = false
 
     private val handler = Handler(Looper.getMainLooper()) { msg ->
@@ -67,7 +98,7 @@ class OcrService : Service() {
                 val paths = msg.data?.getStringArrayList(EXTRA_PATHS) ?: arrayListOf()
                 val clean = msg.data?.getBoolean(EXTRA_CLEAN, true) ?: true
                 val reply = msg.replyTo
-                worker.execute { runRecognition(paths, clean, reply) }
+                dispatcher.execute { runRecognition(paths, clean, reply) }
                 true
             }
 
@@ -88,6 +119,7 @@ class OcrService : Service() {
         // RapidOCR 没有 close()：ONNX session 和 OpenCV Mat 由 GC 回收。
         // 进程退出时系统会一并收掉 native 资源，这里不能调不存在的方法。
         worker.shutdownNow()
+        dispatcher.shutdownNow()
         super.onDestroy()
     }
 
@@ -99,11 +131,31 @@ class OcrService : Service() {
         reply: Messenger?
     ) {
         val payload = try {
+            // 自检只跑一次且必须串行（此时还没分发并行任务），先做掉。
             selfTest()
-            val images = JSONArray()
+
+            // 多图并行：每张图一个任务丢线程池。结果按输入下标回填，
+            // 完成顺序不定也不会错位；去重仍在 recognizeImage 内部按图顺序做。
+            val results = arrayOfNulls<JSONObject>(paths.size)
+            val errors = arrayOfNulls<Throwable>(paths.size)
+            val done = CountDownLatch(paths.size)
             for ((i, path) in paths.withIndex()) {
-                images.put(recognizeImage(path, i, clean))
+                worker.execute {
+                    try {
+                        results[i] = recognizeImage(path, i, clean)
+                    } catch (t: Throwable) {
+                        errors[i] = t
+                    } finally {
+                        done.countDown()
+                    }
+                }
             }
+            done.await()
+
+            // 按输入顺序收集；任何一张失败就整体报错（和原来串行语义一致）。
+            errors.firstOrNull { it != null }?.let { throw it }
+            val images = JSONArray()
+            for (r in results) images.put(r)
             JSONObject().put("ok", true).put("images", images).toString()
         } catch (t: Throwable) {
             trace("识别失败：${t.javaClass.simpleName} ${t.message}")
@@ -135,34 +187,28 @@ class OcrService : Service() {
      */
     private fun selfTest() {
         if (selfTested) return
-        trace("自检 开始")
-        val bmp = Bitmap.createBitmap(320, 120, Bitmap.Config.ARGB_8888)
-        try {
-            val canvas = Canvas(bmp)
-            canvas.drawColor(Color.WHITE)
-            val paint = Paint().apply {
-                color = Color.BLACK
-                textSize = 44f
-                isAntiAlias = true
+        synchronized(this) {
+            if (selfTested) return
+            trace("自检 开始")
+            val bmp = Bitmap.createBitmap(320, 120, Bitmap.Config.ARGB_8888)
+            try {
+                val canvas = Canvas(bmp)
+                canvas.drawColor(Color.WHITE)
+                val paint = Paint().apply {
+                    color = Color.BLACK
+                    textSize = 44f
+                    isAntiAlias = true
+                }
+                canvas.drawText("薪迹 1234", 14f, 72f, paint)
+
+                val hits = engineLocal.get().recognize(bmp)
+                val text = hits.joinToString("") { it.text }.trim()
+                trace("自检 通过「${text.take(24)}」(${hits.size} 段)")
+                selfTested = true
+            } finally {
+                bmp.recycle()
             }
-            canvas.drawText("薪迹 1234", 14f, 72f, paint)
-
-            val hits = ensureOcrEngine().recognize(bmp)
-            val text = hits.joinToString("") { it.text }.trim()
-            trace("自检 通过「${text.take(24)}」(${hits.size} 段)")
-            selfTested = true
-        } finally {
-            bmp.recycle()
         }
-    }
-
-    private fun ensureOcrEngine(): RapidOcrEngine {
-        ocrEngine?.let { return it }
-        val created = RapidOcrEngine(this) { line -> trace(line) }
-        created.ensureLoaded()
-        trace(created.loadInfo)
-        ocrEngine = created
-        return created
     }
 
     private fun recognizeImage(path: String, index: Int, clean: Boolean): JSONObject {
@@ -209,7 +255,7 @@ class OcrService : Service() {
                     ?: throw IllegalStateException("第 ${ti + 1} 块图片解码失败")
                 val started = System.currentTimeMillis()
                 val hits: List<RapidOcrEngine.Hit> = try {
-                    ensureOcrEngine().recognize(bmp)
+                    engineLocal.get().recognize(bmp)
                 } finally {
                     // 一块 1600x1400 的位图就是 9MB，用完立刻放
                     bmp.recycle()
@@ -283,13 +329,18 @@ class OcrService : Service() {
      * 主进程和 :ocr 进程同 UID、同一 filesDir，所以 Dart 侧能直接读。
      */
     private fun trace(text: String) {
-        try {
-            val f = File(filesDir, "ocr_trace.log")
-            if (f.exists() && f.length() > 128 * 1024) f.delete()
-            val stamp = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(Date())
-            f.appendText("$stamp $text\n")
-        } catch (_: Throwable) {
-            // 日志写不进去绝不影响识别
+        // 并行线程同时 append 会写花，串行化
+        synchronized(traceLock) {
+            try {
+                val f = File(filesDir, "ocr_trace.log")
+                if (f.exists() && f.length() > 128 * 1024) f.delete()
+                val stamp = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US).format(Date())
+                f.appendText("$stamp $text\n")
+            } catch (_: Throwable) {
+                // 日志写不进去绝不影响识别
+            }
         }
     }
+
+    private val traceLock = Any()
 }

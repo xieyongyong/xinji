@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as enc;
+import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -39,6 +40,18 @@ class BackupImportResult {
 ///
 /// 为什么不用「ZIP 自带密码」：Flutter 的 archive 包不支持 AES ZIP 加密，
 /// 硬做只能上老式 ZipCrypto（很弱且兼容性差）。整包加密更简单也更安全。
+/// 传给后台 isolate 的打包参数。Archive 里全是纯字节数据，可安全跨 isolate。
+class _BackupPackArgs {
+  final Archive archive;
+  final bool encrypted;
+  final String? password;
+  const _BackupPackArgs({
+    required this.archive,
+    required this.encrypted,
+    required this.password,
+  });
+}
+
 class BackupService {
   final Database db;
   BackupService(this.db);
@@ -184,11 +197,21 @@ class BackupService {
     archive.addFile(
         ArchiveFile('月度汇总.csv', csvSummaryBytes.length, csvSummaryBytes));
 
-    final zipBytes = ZipEncoder().encode(archive);
-    if (zipBytes == null) throw BackupException('打包失败，请重试');
+    // ZIP 压缩 + AES 加密都是纯 CPU 密集活（图片十几 MB 时尤其明显），
+    // 放到后台 isolate 做，避免占住 UI 线程——否则指纹解锁的回调会被卡在
+    // 队列里，表现为「解锁后停在 PIN 界面几秒」。
+    return compute(
+      _packInIsolate,
+      _BackupPackArgs(archive: archive, encrypted: encrypted, password: password),
+    );
+  }
 
-    if (encrypted) return _encrypt(Uint8List.fromList(zipBytes), password!);
-    return zipBytes;
+  /// 后台 isolate 入口：打包 + 可选加密，整段在独立线程跑。
+  static Uint8List _packInIsolate(_BackupPackArgs args) {
+    final zipBytes = ZipEncoder().encode(args.archive);
+    if (zipBytes == null) throw BackupException('打包失败，请重试');
+    final plain = Uint8List.fromList(zipBytes);
+    return args.encrypted ? _encrypt(plain, args.password!) : plain;
   }
 
   // ------------------------------------------------------------ 导入
@@ -591,7 +614,7 @@ class BackupService {
 
   // ------------------------------------------------------------ 加密
 
-  List<int> _deriveKey(String password, List<int> salt) {
+  static List<int> _deriveKey(String password, List<int> salt) {
     var d = sha256.convert([...salt, ...utf8.encode(password)]).bytes;
     for (var i = 0; i < 10000; i++) {
       d = sha256.convert([...d, ...salt]).bytes;
@@ -599,7 +622,7 @@ class BackupService {
     return d; // 32 字节，AES-256
   }
 
-  Uint8List _encrypt(Uint8List plain, String password) {
+  static Uint8List _encrypt(Uint8List plain, String password) {
     // 盐和 IV 都用系统安全随机源生成，每次备份都不同
     final salt = Uint8List.fromList(enc.IV.fromSecureRandom(_saltLen).bytes);
     final iv = enc.IV.fromSecureRandom(_ivLen);

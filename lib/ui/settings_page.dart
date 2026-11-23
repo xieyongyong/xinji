@@ -422,13 +422,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   onTap: () => _pickThemeMode(context, settings),
                 ),
                 _swatches(settings),
-                _item(
-                  icon: Icons.palette_outlined,
-                  title: '主题配色',
-                  subtitle: '当前：${kSeedSchemes[settings.seedIndex < 0 || settings.seedIndex >= kSeedSchemes.length ? 0 : settings.seedIndex].name}',
-                  trailing: const SizedBox.shrink(),
-                  onTap: () => _pickSeed(context, settings),
-                ),
               ]),
               _sectionTitle('安全'),
               _card([
@@ -977,33 +970,45 @@ class _SettingsPageState extends State<SettingsPage> {
         ' · 奖金：${extra?.name ?? '未设置'}';
   }
 
-  /// 配色方案的小色块，点一下直接切换，省得进二级页
+  /// 主题配色：一行小色块点一下直接切换，当前方案名直接显示在下方，
+  /// 不再单独放「主题配色」弹框项（两处选同一件事，重复）。
   Widget _swatches(AppSettings settings) {
+    final idx = settings.seedIndex < 0 || settings.seedIndex >= kSeedSchemes.length
+        ? 0
+        : settings.seedIndex;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 4),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (var i = 0; i < kSeedSchemes.length; i++)
-            GestureDetector(
-              onTap: () => settings.setSeedIndex(i),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                margin: const EdgeInsets.only(right: 10),
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: kSeedSchemes[i].seed,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: settings.seedIndex == i ? kTextPrimary : Colors.transparent,
-                    width: 2,
+          Row(
+            children: [
+              for (var i = 0; i < kSeedSchemes.length; i++)
+                GestureDetector(
+                  onTap: () => settings.setSeedIndex(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    margin: const EdgeInsets.only(right: 10),
+                    width: 30,
+                    height: 30,
+                    decoration: BoxDecoration(
+                      color: kSeedSchemes[i].seed,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: settings.seedIndex == i ? kTextPrimary : Colors.transparent,
+                        width: 2,
+                      ),
+                    ),
+                    child: settings.seedIndex == i
+                        ? const Icon(Icons.check, size: 16, color: Colors.white)
+                        : null,
                   ),
                 ),
-                child: settings.seedIndex == i
-                    ? const Icon(Icons.check, size: 16, color: Colors.white)
-                    : null,
-              ),
-            ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text('当前：${kSeedSchemes[idx].name}',
+              style: TextStyle(fontSize: 11.5, color: kTextHint)),
         ],
       ),
     );
@@ -1148,40 +1153,6 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
     );
     if (v != null) await settings.setThemeMode(v);
-  }
-
-  Future<void> _pickSeed(BuildContext context, AppSettings settings) async {
-    final v = await showDialog<int>(
-      context: context,
-      builder: (_) => SimpleDialog(
-        title: const Text('主题配色', style: TextStyle(fontSize: 15)),
-        children: [
-          for (var i = 0; i < kSeedSchemes.length; i++)
-            SimpleDialogOption(
-              onPressed: () => Navigator.of(context).pop(i),
-              child: Row(
-                children: [
-                  Container(
-                    width: 18,
-                    height: 18,
-                    decoration: BoxDecoration(
-                      color: kSeedSchemes[i].seed,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(kSeedSchemes[i].name, style: const TextStyle(fontSize: 14)),
-                  if (settings.seedIndex == i) ...[
-                    const Spacer(),
-                    Icon(Icons.check, size: 18, color: kSeed),
-                  ],
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-    if (v != null) await settings.setSeedIndex(v);
   }
 
   Widget _sectionTitle(String text) => Padding(

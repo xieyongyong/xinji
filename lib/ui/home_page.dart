@@ -1,3 +1,5 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -42,13 +44,20 @@ class _HomePageState extends State<HomePage>
   /// 不能用 index × 固定高度估算，靠它做精确滚动定位。
   final GlobalKey _thisMonthKey = GlobalKey();
 
-  /// 左滑手势的起点（记录 global 坐标，用来判定方向 + 避开边缘/顶部横滑区）。
+  /// 横滑手势的起点（记录 global 坐标，用来判定方向 + 避开边缘/顶部横滑区）。
   Offset? _swipeStart;
   Offset? _swipeLatest;
 
-  /// 跟手位移：手指往左移多少，主页就跟着左移多少（始终 <= 0）。
-  /// 主页下面垫一层「设置」提示，左移时逐渐露出来。
+  /// 跟手位移：手指往左移主页左移（负）露统计，往右移主页右移（正）露设置。
+  /// 起点限制在屏幕中间偏右，左边缘让给系统返回。
   double _swipeDx = 0;
+
+  /// 松手后要打开的目标页（由本次滑动方向决定），在动画回调里用。
+  Widget? _swipeTargetPage;
+
+  /// 导入按钮随列表滚动显隐：向下滚（看历史）隐藏，回到顶部显示。
+  bool _fabVisible = true;
+  double _lastScrollOffset = 0;
 
   /// 松手后的回弹动画：跟手位移平滑归位。
   late final AnimationController _swipeController = AnimationController(
@@ -61,6 +70,7 @@ class _HomePageState extends State<HomePage>
 
   @override
   void dispose() {
+    _monthScrollController.removeListener(_onMonthScroll);
     _monthScrollController.dispose();
     final listener = _swipeAnimListener;
     if (listener != null) _swipeController.removeListener(listener);
@@ -68,9 +78,24 @@ class _HomePageState extends State<HomePage>
     super.dispose();
   }
 
+  /// 月份列表滚动：向下（看历史）隐藏导入按钮，向上（回顶部）显示。
+  void _onMonthScroll() {
+    if (!_monthScrollController.hasClients || !mounted) return;
+    final offset = _monthScrollController.offset;
+    final delta = offset - _lastScrollOffset;
+    _lastScrollOffset = offset;
+    // 留 2px 死区，避免惯性细微抖动导致按钮来回闪。
+    if (delta > 2 && _fabVisible) {
+      setState(() => _fabVisible = false);
+    } else if (delta < -2 && !_fabVisible) {
+      setState(() => _fabVisible = true);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    _monthScrollController.addListener(_onMonthScroll);
     // 排成一条链：先问要不要开锁，再查更新。
     // 两个弹窗同时抢屏会叠在一起，而且"要不要加把锁"优先级更高。
     final settings = context.read<AppSettings>();
@@ -156,32 +181,25 @@ class _HomePageState extends State<HomePage>
     // 已经离职的雇主不该再提醒"这个月还没录入"
     final stillActive = employer == null || employer.covers(now.year, now.month);
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        // 底层：左滑时从右边露出来的「设置」提示。
-        // 主页左移多少，这层就露多少，给出"要进设置页了"的视觉预期。
-        _swipeReveal(),
-        // 上层：主页整体跟手左移。
-        Transform.translate(
-          offset: Offset(_swipeDx, 0),
-          child: DecoratedBox(
-            decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor),
-            child: GestureDetector(
-              // 从右往左滑进入设置页。方向定义：手指向左移 = 当前页左移 = 设置页从右推入，
-              // 和系统返回（左边缘右滑）方向相反，不会打架。
-              behavior: HitTestBehavior.deferToChild,
-              onHorizontalDragStart: _onSwipeStart,
-              onHorizontalDragUpdate: _onSwipeUpdate,
-              onHorizontalDragEnd: _onSwipeEnd,
-              child: Scaffold(
+    // 跟手位移对应的渐显进度（0→1）与高斯模糊强度。静止时为 0，不挂滤镜，
+    // 只有滑动过程中才短暂模糊主页，避免常驻 BackdropFilter 的性能开销。
+    final swipeProgress =
+        (_swipeDx.abs() / (MediaQuery.of(context).size.width / 3))
+            .clamp(0.0, 1.0)
+            .toDouble();
+    final home = Scaffold(
       appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.receipt_long_outlined, size: 22),
-            SizedBox(width: 8),
-            Text('薪迹'),
-          ],
+        // 左上角「薪迹」logo 即设置入口（右上角不再单独放设置按钮）。
+        title: GestureDetector(
+          onTap: () => _open(const SettingsPage()),
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.receipt_long_outlined, size: 22),
+              SizedBox(width: 8),
+              Text('薪迹'),
+            ],
+          ),
         ),
         actions: [
           IconButton(
@@ -199,13 +217,9 @@ class _HomePageState extends State<HomePage>
           ),
           IconButton(
             tooltip: '统计（总计 / 年度 / 月度 / 项目 / 雇主）',
-            icon: const Icon(Icons.insights_outlined),
+            // 柱状图图标，和截图一致（方框内竖条）。
+            icon: const Icon(Icons.bar_chart_outlined),
             onPressed: () => _open(const StatsPage()),
-          ),
-          IconButton(
-            tooltip: '设置',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () => _open(const SettingsPage()),
           ),
           const SizedBox(width: 4),
         ],
@@ -242,25 +256,73 @@ class _HomePageState extends State<HomePage>
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _open(const ImportPage()),
-        icon: const Icon(Icons.add_photo_alternate_outlined),
-        label: const Text('导入工资条'),
+      // 圆形加号按钮：向下滚看历史时缩没，回到顶部时弹回来（钱迹式）。
+      floatingActionButton: AnimatedScale(
+        scale: _fabVisible ? 1 : 0,
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutBack,
+        child: AnimatedOpacity(
+          opacity: _fabVisible ? 1 : 0,
+          duration: const Duration(milliseconds: 160),
+          child: FloatingActionButton(
+            tooltip: '导入工资条',
+            onPressed: () => _open(const ImportPage()),
+            child: const Icon(Icons.add, size: 28),
+          ),
+        ),
       ),
-              ), // Scaffold
-            ), // GestureDetector
-          ), // DecoratedBox
-        ), // Transform.translate
-      ], // Stack children
+    );
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 底层双向预览：左滑露统计（右）、右滑露设置（左），跟手渐显。
+        Positioned.fill(child: _swipeReveal(swipeProgress)),
+        // 上层主页：跟手平移 + 高斯模糊。静止时 sigma=0 不挂滤镜。
+        Transform.translate(
+          offset: Offset(_swipeDx, 0),
+          child: DecoratedBox(
+            decoration:
+                BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                GestureDetector(
+                  // 左滑进统计、右滑进设置；起点限制避开系统返回与横滑区。
+                  behavior: HitTestBehavior.deferToChild,
+                  onHorizontalDragStart: _onSwipeStart,
+                  onHorizontalDragUpdate: _onSwipeUpdate,
+                  onHorizontalDragEnd: _onSwipeEnd,
+                  child: home,
+                ),
+                // 只在滑动中出现的模糊层：盖住主页，露出下方清晰预览层。
+                if (swipeProgress > 0)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(
+                          sigmaX: swipeProgress * 6,
+                          sigmaY: swipeProgress * 6,
+                        ),
+                        child: const SizedBox.expand(),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
-  // ------------------------------------------------------------ 左滑进设置
+  // ------------------------------------------------------------ 横滑进统计 / 设置
 
-  /// 这个起点能不能作为「左滑进设置」的手势：
-  /// 避开左右边缘（系统返回 / 悬浮锁按钮）、顶部雇主横滑栏。
+  /// 这个起点能不能作为横滑手势：
+  /// 起点必须在「中间偏右」区域——左边缘 1/3 让给系统返回（右滑），
+  /// 左右各 24dp 避开系统边缘与悬浮锁，顶部雇主横滑栏也让开。
   bool _swipeStartAllowed(Offset start, Size size) {
-    if (start.dx < 24 || start.dx > size.width - 24) return false;
+    if (start.dx < size.width / 3 || start.dx > size.width - 24) return false;
     // 雇主栏在 AppBar 之下，起点 y 落在 AppBar 高度 + 雇主栏 40 内让给它。
     final topLimit = kToolbarHeight + 40 + 24;
     if (start.dy < topLimit) return false;
@@ -281,9 +343,10 @@ class _HomePageState extends State<HomePage>
     final size = MediaQuery.of(context).size;
     if (!_swipeStartAllowed(start, size)) return;
 
-    // 只跟「往左移」的位移；往右直接归零。最多跟到 1/3 屏，避免拖太多露白。
+    // 双向跟手：左移露统计（负），右移露设置（正），最多 1/3 屏。
+    final limit = size.width / 3;
     final dx = d.globalPosition.dx - start.dx;
-    final offset = dx >= 0 ? 0.0 : (dx < -size.width / 3 ? -size.width / 3 : dx);
+    final offset = dx.clamp(-limit, limit);
     if (offset != _swipeDx) setState(() => _swipeDx = offset);
   }
 
@@ -297,25 +360,26 @@ class _HomePageState extends State<HomePage>
     final size = MediaQuery.of(context).size;
     final dx = latest.dx - start.dx;
     final v = d.primaryVelocity;
-    // 距离超过 1/3 屏，或末端速度足够快（快速轻扫），且方向向左 → 进设置。
-    final commit = _swipeStartAllowed(start, size) &&
-        dx < 0 &&
-        (dx <= -size.width / 3 || (v != null && v <= -400));
+    final limit = size.width / 3;
+
+    // 距离超过 1/3 屏，或末端速度够快（快速轻扫）即触发；方向决定目标页。
+    final farEnough = dx.abs() >= limit;
+    final fastEnough = v != null && v.abs() >= 400 && (dx.sign == v.sign);
+    final commit = _swipeStartAllowed(start, size) && (farEnough || fastEnough);
 
     if (!commit) {
-      // 不满足：跟手位移弹回 0。
       _animateSwipeBack(to: 0);
       return;
     }
 
-    // 满足：先让跟手位移顺势滑完剩下的一小段（到 -1/3 屏），随即 push 设置页。
-    // 不在 push 前把主页推到 -屏宽 —— 那样从设置页返回时会先露一瞬绿色底层
-    // 再瞬间跳回。这里归零和 push 接在同一个动画尾，返回时主页已在原位。
-    _animateSwipeBack(to: -size.width / 3, onDone: () {
+    // 左滑（负）→ 统计；右滑（正）→ 设置。
+    _swipeTargetPage = dx < 0 ? const StatsPage() : const SettingsPage();
+    // 顺势滑完到目标侧 1/3 屏，动画尾 push 目标页；pop 返回后复位到 0。
+    _animateSwipeBack(to: dx < 0 ? -limit : limit, onDone: () {
       if (!mounted) return;
-      // push 期间主页停在左移位；系统路由转场（设置页从右滑入）会盖住底层，
-      // pop 返回后把主页复位到 0。
-      _open(const SettingsPage()).then((_) {
+      final page = _swipeTargetPage ?? const SettingsPage();
+      _swipeTargetPage = null;
+      _open(page).then((_) {
         if (mounted) setState(() => _swipeDx = 0);
       });
     });
@@ -350,26 +414,27 @@ class _HomePageState extends State<HomePage>
     });
   }
 
-  /// 主页左移时从右边露出来的设置提示层。
-  Widget _swipeReveal() {
+  /// 横滑时主页让出的底层预览：左滑露统计（右侧）、右滑露设置（左侧）。
+  /// 静态预览层，纯图标+文字，不加下划线。
+  Widget _swipeReveal(double progress) {
+    final toStats = _swipeDx < 0;
+    final icon = toStats ? Icons.bar_chart_outlined : Icons.settings_outlined;
+    final label = toStats ? '统计' : '设置';
     return Container(
       color: kSeed,
-      alignment: Alignment.centerRight,
-      padding: const EdgeInsets.only(right: 40),
+      alignment: toStats ? Alignment.centerRight : Alignment.centerLeft,
+      padding: EdgeInsets.symmetric(horizontal: 40),
       child: Opacity(
-        // 跟手位移越大越清晰（0→0，1/3 屏→1）。
-        opacity: (_swipeDx / (MediaQuery.of(context).size.width / 3))
-            .abs()
-            .clamp(0.0, 1.0)
-            .toDouble(),
-        child: const Column(
+        opacity: progress,
+        child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
+          crossAxisAlignment:
+              toStats ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
-            Icon(Icons.settings_outlined, size: 44, color: Colors.white),
-            SizedBox(height: 10),
-            Text('设置',
-                style: TextStyle(
+            Icon(icon, size: 44, color: Colors.white),
+            const SizedBox(height: 10),
+            Text(label,
+                style: const TextStyle(
                     fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
           ],
         ),
@@ -464,8 +529,8 @@ class _HomePageState extends State<HomePage>
           // 回到本月：不论当前翻到哪一年，一键跳回「今年 + 本月」并把该月卡片滚到可见。
           // 和左右箭头/年份弹窗是不同用途 —— 那两个是浏览历史，这个是随时归位。
           IconButton(
-            tooltip: '回到本月',
-            icon: const Icon(Icons.today_outlined, size: 21),
+            tooltip: '回到本月（重新定位到当前月份）',
+            icon: const Icon(Icons.my_location, size: 20),
             onPressed: _goToThisMonth,
           ),
         ],
