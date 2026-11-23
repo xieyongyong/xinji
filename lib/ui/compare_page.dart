@@ -949,8 +949,8 @@ class _ComparePageState extends State<ComparePage> {
             color: kSeed,
             trailing: '两笔对比',
             children: [
-              _infoRow('名目', a.displayTitle, b.displayTitle),
-              _infoRow('期间', '${a.periodYear}-${a.periodMonth}',
+              _extraInfoRow('名目', a.displayTitle, b.displayTitle),
+              _extraInfoRow('期间', '${a.periodYear}-${a.periodMonth}',
                   '${b.periodYear}-${b.periodMonth}'),
             ],
           ),
@@ -1048,7 +1048,7 @@ class _ComparePageState extends State<ComparePage> {
     );
   }
 
-  Widget _infoRow(String label, String a, String b) {
+  Widget _extraInfoRow(String label, String a, String b) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
