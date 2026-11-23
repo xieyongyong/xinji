@@ -246,9 +246,10 @@ class _HomePageState extends State<HomePage>
         icon: const Icon(Icons.add_photo_alternate_outlined),
         label: const Text('导入工资条'),
       ),
-              ), // GestureDetector
-            ), // DecoratedBox
-          ), // Transform
+              ), // Scaffold
+            ), // GestureDetector
+          ), // DecoratedBox
+        ), // Transform.translate
       ], // Stack children
     );
   }
