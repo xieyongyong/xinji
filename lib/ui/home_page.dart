@@ -34,7 +34,8 @@ class _HomePageState extends State<HomePage>
     with SingleTickerProviderStateMixin {
   int _year = DateTime.now().year;
 
-  /// 月份列表的滚动控制器：「回到本月」时先回顶再精确定位。
+  /// 月份列表的滚动控制器：「回到本月」时先回顶，让懒加载的本月卡片 build 出来，
+  /// 再用 key 精确定位。
   final ScrollController _monthScrollController = ScrollController();
 
   /// 本月卡片的 key：卡片高度不固定（有数据/未录入不同高），
