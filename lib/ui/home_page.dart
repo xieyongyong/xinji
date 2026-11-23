@@ -480,6 +480,10 @@ class _HomePageState extends State<HomePage>
   void _goToThisMonth() {
     final now = DateTime.now();
     setState(() => _year = now.year);
+    // 列表是懒加载的：若之前停在底部，本月卡片的 context 还没 build，
+    // 直接 ensureVisible 会拿不到目标。先回顶让顶部 item（含本月）建出来，
+    // 下一帧再用 key 精确对齐到本月卡片。
+    if (_monthScrollController.hasClients) _monthScrollController.jumpTo(0);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final ctx = _thisMonthKey.currentContext;
