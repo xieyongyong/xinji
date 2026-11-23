@@ -162,15 +162,23 @@ class WebDavClient implements CloudBackupProvider {
   /// [HttpClient.connectionTimeout] 和 [SocketException] 兜底，不会无限等。
   static const _uploadTimeout = Duration(minutes: 5);
 
-  /// 全量上传：先 PUT 到 .tmp，成功后再 MOVE 覆盖正式文件（原子替换，
-  /// 防止中途断网把云端旧备份覆盖成半截坏包）。
+  /// 全量上传：直接 PUT 覆盖云端正式文件。
+  ///
+  /// 曾经用「先 PUT 到 .tmp，再 MOVE + Overwrite=T 覆盖」做原子替换，
+  /// 但 MOVE 是 WebDAV **可选**方法，坚果云/群晖等对「目标已存在」的 MOVE
+  /// 常回 409 Conflict —— 表现就是每次重新备份都报「替换失败 HTTP 409」。
+  /// 云端只留一份、每次全量覆盖本就是预期语义，直接用 PUT（幂等、所有
+  /// WebDAV 服务器都支持）最简单可靠，也顺带少了两次请求、更快。
+  ///
+  /// 代价：极端情况下传一半断网，云端那份会不完整；但本地数据不受影响，
+  /// 恢复时 decrypt/unzip 会明确报「文件损坏」，不会静默用坏数据。
   @override
   Future<void> upload(String remoteName, List<int> bytes) async {
     await _ensureRoot();
-    final tmp = Uri.parse('${_uri(remoteName)}.tmp');
+    final target = _uri(remoteName);
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final put = await client.openUrl('PUT', tmp).timeout(const Duration(seconds: 30));
+      final put = await client.openUrl('PUT', target).timeout(const Duration(seconds: 30));
       put.headers.set('Authorization', _auth);
       put.headers.set('Content-Type', 'application/octet-stream');
       put.contentLength = bytes.length;
@@ -184,19 +192,9 @@ class WebDavClient implements CloudBackupProvider {
       }
       final putResp = await put.close().timeout(_uploadTimeout);
       await putResp.drain<void>();
+      // 覆盖已存在资源：200=OK / 201=Created / 204=No Content，都算成功
       if (putResp.statusCode != 200 && putResp.statusCode != 201 && putResp.statusCode != 204) {
         throw WebDavException('上传失败（HTTP ${putResp.statusCode}），账号或目录权限不对？');
-      }
-
-      // MOVE：Overwrite=T 覆盖正式文件
-      final move = await client.openUrl('MOVE', tmp).timeout(const Duration(seconds: 30));
-      move.headers.set('Authorization', _auth);
-      move.headers.set('Destination', _uri(remoteName).toString());
-      move.headers.set('Overwrite', 'T');
-      final moveResp = await move.close().timeout(const Duration(seconds: 30));
-      await moveResp.drain<void>();
-      if (moveResp.statusCode != 200 && moveResp.statusCode != 201 && moveResp.statusCode != 204) {
-        throw WebDavException('替换云端备份失败（HTTP ${moveResp.statusCode}）');
       }
     } on WebDavException {
       rethrow;
@@ -268,5 +266,5 @@ class WebDavClient implements CloudBackupProvider {
   }
 }
 
-/// 云端固定文件名：永远只留最新一份（PUT 同名覆盖 / MOVE 原子替换）。
+/// 云端固定文件名：永远只留最新一份（每次 PUT 同名直接覆盖）。
 const String kCloudBackupName = 'xinji_backup.xbk';

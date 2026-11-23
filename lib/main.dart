@@ -66,6 +66,15 @@ class XinJiApp extends StatefulWidget {
 class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
   DateTime? _pausedAt;
 
+  /// 切后台那一刻是否正处于锁定态。
+  ///
+  /// 冷启动锁屏页弹系统指纹框时，App 也会被推到 paused；验证成功 unlock 后
+  /// 系统框关闭触发 resumed。若只看「暂停时长 >= lockDelay」就重锁，
+  /// 而 lockDelay 设成 0（立即锁定）或验证稍慢，就会出现
+  /// 「指纹解开了却又弹回锁屏页」——必须杀进程重开才正常。
+  /// 记住暂停时的锁态：本来就锁着的那次暂停，回来一律不再重锁。
+  bool _wasLockedWhenPaused = false;
+
   @override
   void initState() {
     super.initState();
@@ -89,14 +98,23 @@ class _XinJiAppState extends State<XinJiApp> with WidgetsBindingObserver {
         break;
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
-        // 真正切后台：记下时间点供回前台判断重锁，并补一次遮罩（幂等）。
-        _pausedAt ??= DateTime.now();
+        // 真正切后台：记下时间点和当时的锁态，供回前台判断重锁；补一次遮罩（幂等）。
+        // 只在第一次进入后台时记，后续 hidden/paused 抖动不覆盖。
+        if (_pausedAt == null) {
+          _pausedAt = DateTime.now();
+          _wasLockedWhenPaused = widget.lock.locked;
+        }
         if (widget.settings.privacyMask) widget.lock.mask();
         break;
       case AppLifecycleState.resumed:
         final paused = _pausedAt;
+        final wasLocked = _wasLockedWhenPaused;
         _pausedAt = null;
-        if (paused != null) {
+        _wasLockedWhenPaused = false;
+        // 只有「当时是解锁着看内容」的切后台才需要判断超时重锁。
+        // 冷启动锁屏页弹指纹框那种暂停，wasLocked=true，回来一律不重锁 ——
+        // 否则刚指纹解开又会被锁上，表现为停在锁屏页、要重开 App 才恢复。
+        if (paused != null && !wasLocked) {
           final delay = widget.settings.lockDelaySeconds;
           if (DateTime.now().difference(paused).inSeconds >= delay) {
             widget.lock.lockNow();

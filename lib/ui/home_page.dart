@@ -30,22 +30,40 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with SingleTickerProviderStateMixin {
   int _year = DateTime.now().year;
 
-  /// 上一次看到的雇主，用来判断"是不是刚切了雇主"
-  int? _lastEmployerId;
-
-  /// 月份列表的滚动控制器：切雇主后要能主动滚回顶部（最新当月）。
+  /// 月份列表的滚动控制器：「回到本月」时先回顶再精确定位。
   final ScrollController _monthScrollController = ScrollController();
+
+  /// 本月卡片的 key：卡片高度不固定（有数据/未录入不同高），
+  /// 不能用 index × 固定高度估算，靠它做精确滚动定位。
+  final GlobalKey _thisMonthKey = GlobalKey();
 
   /// 左滑手势的起点（记录 global 坐标，用来判定方向 + 避开边缘/顶部横滑区）。
   Offset? _swipeStart;
   Offset? _swipeLatest;
 
+  /// 跟手位移：手指往左移多少，主页就跟着左移多少（始终 <= 0）。
+  /// 主页下面垫一层「设置」提示，左移时逐渐露出来。
+  double _swipeDx = 0;
+
+  /// 松手后的回弹动画：跟手位移平滑归位。
+  late final AnimationController _swipeController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 180),
+  );
+
+  /// 当前挂着的回弹 listener，重复触发前先摘掉，避免累积。
+  VoidCallback? _swipeAnimListener;
+
   @override
   void dispose() {
     _monthScrollController.dispose();
+    final listener = _swipeAnimListener;
+    if (listener != null) _swipeController.removeListener(listener);
+    _swipeController.dispose();
     super.dispose();
   }
 
@@ -121,25 +139,6 @@ class _HomePageState extends State<HomePage> {
     final hideAmounts = context.watch<AppSettings>().hideAmounts;
     final years = state.years;
 
-    // 刚切换雇主时，把年份跳到它最近的记录年份。
-    // 为什么不在 build 里无脑判断"今年有没有数据"：那样用户想翻到一个
-    // 还没录入的年份时会被立刻弹回来，没法录新一年的第一条。
-    final employerId = state.currentEmployer?.id;
-    final switchedEmployer = _lastEmployerId != employerId;
-    if (switchedEmployer) {
-      _lastEmployerId = employerId;
-      _year = state.scopedRecords.isNotEmpty
-          ? state.scopedRecords.first.periodYear
-          : DateTime.now().year;
-      // 切雇主后把月份列表滚回顶部。列表是 12→1 倒序排的，顶部就是最新当月；
-      // 不滚的话会保留上一家雇主停留的偏移，看起来像"没定位到当月"。
-      // 用 addPostFrameCallback：等新一年的列表 layout 完再滚，否则 hasClients 可能还没就绪。
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_monthScrollController.hasClients) {
-          _monthScrollController.jumpTo(0);
-        }
-      });
-    }
     final year = _year;
     final summary = StatsBuilder.buildYear(state.scopedRecords, year);
     // 年份弹窗里每年带一个实发数：光看年份号不知道哪年有数据、哪年多。
@@ -156,14 +155,25 @@ class _HomePageState extends State<HomePage> {
     // 已经离职的雇主不该再提醒"这个月还没录入"
     final stillActive = employer == null || employer.covers(now.year, now.month);
 
-    return GestureDetector(
-      // 从右往左滑进入设置页。方向定义：手指向左移 = 当前页左移 = 设置页从右推入，
-      // 和系统返回（左边缘右滑）方向相反，不会打架。
-      behavior: HitTestBehavior.deferToChild,
-      onHorizontalDragStart: _onSwipeStart,
-      onHorizontalDragUpdate: _onSwipeUpdate,
-      onHorizontalDragEnd: _onSwipeEnd,
-      child: Scaffold(
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // 底层：左滑时从右边露出来的「设置」提示。
+        // 主页左移多少，这层就露多少，给出"要进设置页了"的视觉预期。
+        _swipeReveal(),
+        // 上层：主页整体跟手左移。
+        Transform.translate(
+          offset: Offset(_swipeDx, 0),
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: Theme.of(context).scaffoldBackgroundColor),
+            child: GestureDetector(
+              // 从右往左滑进入设置页。方向定义：手指向左移 = 当前页左移 = 设置页从右推入，
+              // 和系统返回（左边缘右滑）方向相反，不会打架。
+              behavior: HitTestBehavior.deferToChild,
+              onHorizontalDragStart: _onSwipeStart,
+              onHorizontalDragUpdate: _onSwipeUpdate,
+              onHorizontalDragEnd: _onSwipeEnd,
+              child: Scaffold(
       appBar: AppBar(
         title: const Row(
           children: [
@@ -220,7 +230,12 @@ class _HomePageState extends State<HomePage> {
                 }
                 final m = summary.months[month - 1];
                 final prev = month > 1 ? summary.months[month - 2] : null;
-                return _monthCard(m, prev, year);
+                final card = _monthCard(m, prev, year);
+                // 只给「今年本月」挂 key，供「回到本月」精确定位；
+                // 其他月份不加 key，避免 GlobalKey 重复。
+                return year == now.year && month == now.month
+                    ? KeyedSubtree(key: _thisMonthKey, child: card)
+                    : card;
               },
             ),
           ),
@@ -231,11 +246,24 @@ class _HomePageState extends State<HomePage> {
         icon: const Icon(Icons.add_photo_alternate_outlined),
         label: const Text('导入工资条'),
       ),
-      ),
+              ), // GestureDetector
+            ), // DecoratedBox
+          ), // Transform
+      ], // Stack children
     );
   }
 
   // ------------------------------------------------------------ 左滑进设置
+
+  /// 这个起点能不能作为「左滑进设置」的手势：
+  /// 避开左右边缘（系统返回 / 悬浮锁按钮）、顶部雇主横滑栏。
+  bool _swipeStartAllowed(Offset start, Size size) {
+    if (start.dx < 24 || start.dx > size.width - 24) return false;
+    // 雇主栏在 AppBar 之下，起点 y 落在 AppBar 高度 + 雇主栏 40 内让给它。
+    final topLimit = kToolbarHeight + 40 + 24;
+    if (start.dy < topLimit) return false;
+    return true;
+  }
 
   void _onSwipeStart(DragStartDetails d) {
     _swipeStart = d.globalPosition;
@@ -243,7 +271,18 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _onSwipeUpdate(DragUpdateDetails d) {
+    final start = _swipeStart;
+    if (start == null || !mounted) return;
     _swipeLatest = d.globalPosition;
+
+    // 无效起点的手势不让主页跟着动，否则边缘返回、雇主横滑都会带着整页偏。
+    final size = MediaQuery.of(context).size;
+    if (!_swipeStartAllowed(start, size)) return;
+
+    // 只跟「往左移」的位移；往右直接归零。最多跟到 1/3 屏，避免拖太多露白。
+    final dx = d.globalPosition.dx - start.dx;
+    final offset = dx >= 0 ? 0.0 : (dx < -size.width / 3 ? -size.width / 3 : dx);
+    if (offset != _swipeDx) setState(() => _swipeDx = offset);
   }
 
   void _onSwipeEnd(DragEndDetails d) {
@@ -254,22 +293,86 @@ class _HomePageState extends State<HomePage> {
     if (start == null || latest == null || !mounted) return;
 
     final size = MediaQuery.of(context).size;
-    // 起点避开左右边缘各 24dp：Android 手势导航两侧边缘内滑是系统返回，
-    // 右侧还常有悬浮锁按钮（吃横向拖拽）。左边缘右滑是 iOS/Android 返回，也要避开。
-    if (start.dx < 24 || start.dx > size.width - 24) return;
-    // 顶部雇主横滑栏（40dp）区域让给雇主切换，不抢它的横向手势。
-    // 雇主栏在 AppBar 之下，起点 y 落在 AppBar 高度 + 雇主栏 40 内就忽略。
-    final topLimit = kToolbarHeight + 40 + 24;
-    if (start.dy < topLimit) return;
-
-    // 只认「手指向左移」。距离超过 1/3 屏，或末端速度足够快（快速轻扫），
-    // 两者满足其一即触发；方向必须是向左（dx < 0 / 速度为负）。
     final dx = latest.dx - start.dx;
     final v = d.primaryVelocity;
-    final farEnough = dx <= -size.width / 3;
-    final fastEnough = v != null && v <= -400;
-    if (dx >= 0 || (!farEnough && !fastEnough)) return;
-    _open(const SettingsPage());
+    // 距离超过 1/3 屏，或末端速度足够快（快速轻扫），且方向向左 → 进设置。
+    final commit = _swipeStartAllowed(start, size) &&
+        dx < 0 &&
+        (dx <= -size.width / 3 || (v != null && v <= -400));
+
+    if (!commit) {
+      // 不满足：跟手位移弹回 0。
+      _animateSwipeBack(to: 0);
+      return;
+    }
+
+    // 满足：先让跟手位移顺势滑完剩下的一小段（到 -1/3 屏），随即 push 设置页。
+    // 不在 push 前把主页推到 -屏宽 —— 那样从设置页返回时会先露一瞬绿色底层
+    // 再瞬间跳回。这里归零和 push 接在同一个动画尾，返回时主页已在原位。
+    _animateSwipeBack(to: -size.width / 3, onDone: () {
+      if (!mounted) return;
+      // push 期间主页停在左移位；系统路由转场（设置页从右滑入）会盖住底层，
+      // pop 返回后把主页复位到 0。
+      _open(const SettingsPage()).then((_) {
+        if (mounted) setState(() => _swipeDx = 0);
+      });
+    });
+  }
+
+  /// 松手后把跟手位移动画到 [to]。
+  void _animateSwipeBack({required double to, VoidCallback? onDone}) {
+    // 上一次动画若还没结束，先摘掉它的 listener，避免多个 listener 叠加 setState。
+    final prev = _swipeAnimListener;
+    if (prev != null) _swipeController.removeListener(prev);
+
+    final from = _swipeDx;
+    if (from == to) {
+      onDone?.call();
+      return;
+    }
+    final anim = Tween<double>(begin: from, end: to).animate(
+      CurvedAnimation(parent: _swipeController, curve: Curves.easeOut),
+    );
+    void listener() {
+      if (!mounted) return;
+      setState(() => _swipeDx = anim.value);
+    }
+    _swipeAnimListener = listener;
+    _swipeController
+      ..reset()
+      ..addListener(listener);
+    _swipeController.forward().then((_) {
+      _swipeController.removeListener(listener);
+      if (identical(_swipeAnimListener, listener)) _swipeAnimListener = null;
+      onDone?.call();
+    });
+  }
+
+  /// 主页左移时从右边露出来的设置提示层。
+  Widget _swipeReveal() {
+    return Container(
+      color: kSeed,
+      alignment: Alignment.centerRight,
+      padding: const EdgeInsets.only(right: 40),
+      child: Opacity(
+        // 跟手位移越大越清晰（0→0，1/3 屏→1）。
+        opacity: (_swipeDx / (MediaQuery.of(context).size.width / 3))
+            .abs()
+            .clamp(0.0, 1.0)
+            .toDouble(),
+        child: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Icon(Icons.settings_outlined, size: 44, color: Colors.white),
+            SizedBox(height: 10),
+            Text('设置',
+                style: TextStyle(
+                    fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
+          ],
+        ),
+      ),
+    );
   }
 
   // ------------------------------------------------------------ 顶部区域
@@ -356,9 +459,38 @@ class _HomePageState extends State<HomePage> {
                 ? () => setState(() => _year = year + 1)
                 : null,
           ),
+          // 回到本月：不论当前翻到哪一年，一键跳回「今年 + 本月」并把该月卡片滚到可见。
+          // 和左右箭头/年份弹窗是不同用途 —— 那两个是浏览历史，这个是随时归位。
+          IconButton(
+            tooltip: '回到本月',
+            icon: const Icon(Icons.today_outlined, size: 21),
+            onPressed: _goToThisMonth,
+          ),
         ],
       ),
     );
+  }
+
+  /// 回到实时当前月份：年份切回今年，月份列表滚到本月卡片。
+  ///
+  /// 卡片高度不固定（有数据的一月可能十几笔、没录入的只有一行），
+  /// 所以不能按 index×固定高度 jumpTo —— 用挂在本月卡片上的 GlobalKey
+  /// 让 Scrollable 自己算真实偏移。等一帧让新年份的列表 layout 完再滚。
+  void _goToThisMonth() {
+    final now = DateTime.now();
+    setState(() => _year = now.year);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _thisMonthKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          alignment: 0.15,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
   }
 
   Future<void> _pickYear(
