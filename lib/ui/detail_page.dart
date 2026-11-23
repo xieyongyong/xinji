@@ -227,9 +227,31 @@ class DetailPage extends StatelessWidget {
               _miniStat('代扣', displayCents(r.deductionCents)),
             ],
           ),
+          // 记录这条是什么时候、以什么方式进来的（老数据 migration 用 created_at 回填）
+          if (_timeLine(r).isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              _timeLine(r),
+              style: TextStyle(fontSize: 10.5, color: Colors.white.withOpacity(0.6)),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  /// 「导入/录入时间 + 来源」一行小字
+  String _timeLine(PayRecord r) {
+    final t = r.importedAt;
+    if (t == null || t <= 0) return '';
+    final dt = DateTime.fromMillisecondsSinceEpoch(t);
+    final d = '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+        '${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final verb = r.source == kSourceImport ? '图片识别导入' : '手动录入';
+    // 编辑过就补一句"已编辑"，让人分清导入时间和最后修改
+    final edited = r.updatedAt > t + 60 * 1000 ? ' · 之后有修改' : '';
+    return '$d · $verb$edited';
   }
 
   Widget _miniStat(String label, String value) => Column(

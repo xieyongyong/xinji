@@ -8,7 +8,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../backup/backup_service.dart';
-import 'backup_manager_page.dart';
 import '../core/app_settings.dart';
 import '../core/app_update.dart';
 import '../core/crash_log.dart';
@@ -683,15 +682,6 @@ class _SettingsPageState extends State<SettingsPage> {
                   title: '导出备份',
                   subtitle: '存到手机「下载」目录，可选明文或加密',
                   onTap: _exportBackup,
-                ),
-                const Divider(height: 1),
-                _item(
-                  icon: Icons.folder_open_outlined,
-                  title: '本地备份管理',
-                  subtitle: '查看并删除以前残留在 App 里、文件管理器删不掉的旧备份',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const BackupManagerPage()),
-                  ),
                 ),
                 const Divider(height: 1),
                 _item(

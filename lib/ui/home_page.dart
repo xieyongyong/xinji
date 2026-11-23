@@ -36,6 +36,19 @@ class _HomePageState extends State<HomePage> {
   /// 上一次看到的雇主，用来判断"是不是刚切了雇主"
   int? _lastEmployerId;
 
+  /// 月份列表的滚动控制器：切雇主后要能主动滚回顶部（最新当月）。
+  final ScrollController _monthScrollController = ScrollController();
+
+  /// 左滑手势的起点（记录 global 坐标，用来判定方向 + 避开边缘/顶部横滑区）。
+  Offset? _swipeStart;
+  Offset? _swipeLatest;
+
+  @override
+  void dispose() {
+    _monthScrollController.dispose();
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -112,11 +125,20 @@ class _HomePageState extends State<HomePage> {
     // 为什么不在 build 里无脑判断"今年有没有数据"：那样用户想翻到一个
     // 还没录入的年份时会被立刻弹回来，没法录新一年的第一条。
     final employerId = state.currentEmployer?.id;
-    if (_lastEmployerId != employerId) {
+    final switchedEmployer = _lastEmployerId != employerId;
+    if (switchedEmployer) {
       _lastEmployerId = employerId;
       _year = state.scopedRecords.isNotEmpty
           ? state.scopedRecords.first.periodYear
           : DateTime.now().year;
+      // 切雇主后把月份列表滚回顶部。列表是 12→1 倒序排的，顶部就是最新当月；
+      // 不滚的话会保留上一家雇主停留的偏移，看起来像"没定位到当月"。
+      // 用 addPostFrameCallback：等新一年的列表 layout 完再滚，否则 hasClients 可能还没就绪。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_monthScrollController.hasClients) {
+          _monthScrollController.jumpTo(0);
+        }
+      });
     }
     final year = _year;
     final summary = StatsBuilder.buildYear(state.scopedRecords, year);
@@ -134,7 +156,14 @@ class _HomePageState extends State<HomePage> {
     // 已经离职的雇主不该再提醒"这个月还没录入"
     final stillActive = employer == null || employer.covers(now.year, now.month);
 
-    return Scaffold(
+    return GestureDetector(
+      // 从右往左滑进入设置页。方向定义：手指向左移 = 当前页左移 = 设置页从右推入，
+      // 和系统返回（左边缘右滑）方向相反，不会打架。
+      behavior: HitTestBehavior.deferToChild,
+      onHorizontalDragStart: _onSwipeStart,
+      onHorizontalDragUpdate: _onSwipeUpdate,
+      onHorizontalDragEnd: _onSwipeEnd,
+      child: Scaffold(
       appBar: AppBar(
         title: const Row(
           children: [
@@ -180,6 +209,7 @@ class _HomePageState extends State<HomePage> {
             _missingBanner(now.month),
           Expanded(
             child: ListView.builder(
+              controller: _monthScrollController,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
               itemCount: 12,
               itemBuilder: (context, index) {
@@ -201,7 +231,45 @@ class _HomePageState extends State<HomePage> {
         icon: const Icon(Icons.add_photo_alternate_outlined),
         label: const Text('导入工资条'),
       ),
+      ),
     );
+  }
+
+  // ------------------------------------------------------------ 左滑进设置
+
+  void _onSwipeStart(DragStartDetails d) {
+    _swipeStart = d.globalPosition;
+    _swipeLatest = d.globalPosition;
+  }
+
+  void _onSwipeUpdate(DragUpdateDetails d) {
+    _swipeLatest = d.globalPosition;
+  }
+
+  void _onSwipeEnd(DragEndDetails d) {
+    final start = _swipeStart;
+    final latest = _swipeLatest;
+    _swipeStart = null;
+    _swipeLatest = null;
+    if (start == null || latest == null || !mounted) return;
+
+    final size = MediaQuery.of(context).size;
+    // 起点避开左右边缘各 24dp：Android 手势导航两侧边缘内滑是系统返回，
+    // 右侧还常有悬浮锁按钮（吃横向拖拽）。左边缘右滑是 iOS/Android 返回，也要避开。
+    if (start.dx < 24 || start.dx > size.width - 24) return;
+    // 顶部雇主横滑栏（40dp）区域让给雇主切换，不抢它的横向手势。
+    // 雇主栏在 AppBar 之下，起点 y 落在 AppBar 高度 + 雇主栏 40 内就忽略。
+    final topLimit = kToolbarHeight + 40 + 24;
+    if (start.dy < topLimit) return;
+
+    // 只认「手指向左移」。距离超过 1/3 屏，或末端速度足够快（快速轻扫），
+    // 两者满足其一即触发；方向必须是向左（dx < 0 / 速度为负）。
+    final dx = latest.dx - start.dx;
+    final v = d.primaryVelocity;
+    final farEnough = dx <= -size.width / 3;
+    final fastEnough = v != null && v <= -400;
+    if (dx >= 0 || (!farEnough && !fastEnough)) return;
+    _open(const SettingsPage());
   }
 
   // ------------------------------------------------------------ 顶部区域

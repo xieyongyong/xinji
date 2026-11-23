@@ -39,8 +39,41 @@ class VisualRow {
 
   void add(RawLine line) => cells.add(line);
 
-  /// 按 x 从左到右排序（配对时"最右的金额"才是金额列）
-  void sortCells() => cells.sort((a, b) => a.left.compareTo(b.left));
+  /// 排序片段：先按 y 分成视觉子行，子行内再按 x 从左到右。
+  ///
+  /// 为什么不能只按 left：一个项目名太长被折成两行时（如「休息日加班时」+ 下一行「数」），
+  /// OCR 会把两行当成两个片段。若只按 left 排，靠左的「数」会跑到前面拼成「数休息日加班时」，
+  /// 每次都被当成新项目。按 y 分档后，「数」自然排在「时」后面，还原成「休息日加班时数」。
+  /// 注意 y 容差取中位行高的 0.6：正常同一行的左右两栏（项目名 vs 金额）y 几乎相同，
+  /// 不会被拆开；只有明显换行（相差约一个行高）才分到不同子行。
+  void sortCells() {
+    if (cells.length < 2) return;
+    final byY = [...cells]..sort((a, b) => a.centerY.compareTo(b.centerY));
+    final heights = byY.map((e) => e.height).where((h) => h > 0).toList()..sort();
+    final medianH = heights.isEmpty ? 12.0 : heights[heights.length ~/ 2];
+    final yTol = medianH * 0.6;
+
+    final buckets = <List<RawLine>>[];
+    for (final c in byY) {
+      if (buckets.isEmpty) {
+        buckets.add([c]);
+        continue;
+      }
+      final last = buckets.last;
+      final lastCenter = last.map((e) => e.centerY).reduce((a, b) => a + b) / last.length;
+      if ((c.centerY - lastCenter).abs() <= yTol) {
+        last.add(c);
+      } else {
+        buckets.add([c]);
+      }
+    }
+    cells
+      ..clear()
+      ..addAll(buckets.expand((b) {
+        b.sort((a, z) => a.left.compareTo(z.left));
+        return b;
+      }));
+  }
 
   double get top => cells.map((e) => e.top).reduce((a, b) => a < b ? a : b);
   double get bottom => cells.map((e) => e.bottom).reduce((a, b) => a > b ? a : b);

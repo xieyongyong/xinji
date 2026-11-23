@@ -157,27 +157,39 @@ class WebDavClient implements CloudBackupProvider {
     }
   }
 
+  /// 上传阶段的硬上限。三年数据加密后可能十几 MB，慢网/移动网络下 30s 远远不够 ——
+  /// 这是原来"三年数据必超时"的直接原因。放宽到 5 分钟；真正断网由
+  /// [HttpClient.connectionTimeout] 和 [SocketException] 兜底，不会无限等。
+  static const _uploadTimeout = Duration(minutes: 5);
+
   /// 全量上传：先 PUT 到 .tmp，成功后再 MOVE 覆盖正式文件（原子替换，
   /// 防止中途断网把云端旧备份覆盖成半截坏包）。
   @override
   Future<void> upload(String remoteName, List<int> bytes) async {
     await _ensureRoot();
     final tmp = Uri.parse('${_uri(remoteName)}.tmp');
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 30);
     try {
-      final put = await client.openUrl('PUT', tmp).timeout(const Duration(seconds: 20));
+      final put = await client.openUrl('PUT', tmp).timeout(const Duration(seconds: 30));
       put.headers.set('Authorization', _auth);
       put.headers.set('Content-Type', 'application/octet-stream');
       put.contentLength = bytes.length;
-      put.add(bytes);
-      final putResp = await put.close().timeout(const Duration(seconds: 30));
+      // 分块写入 + flush：让 socket 持续有数据流动，既给底层发送留出时间，
+      // 也避免一次性把整包压进 buffer。每块 256KB，失败由外层统一转成 WebDavException。
+      const chunk = 256 * 1024;
+      for (var i = 0; i < bytes.length; i += chunk) {
+        final end = (i + chunk < bytes.length) ? i + chunk : bytes.length;
+        put.add(bytes.sublist(i, end));
+        await put.flush();
+      }
+      final putResp = await put.close().timeout(_uploadTimeout);
       await putResp.drain<void>();
       if (putResp.statusCode != 200 && putResp.statusCode != 201 && putResp.statusCode != 204) {
         throw WebDavException('上传失败（HTTP ${putResp.statusCode}），账号或目录权限不对？');
       }
 
       // MOVE：Overwrite=T 覆盖正式文件
-      final move = await client.openUrl('MOVE', tmp).timeout(const Duration(seconds: 20));
+      final move = await client.openUrl('MOVE', tmp).timeout(const Duration(seconds: 30));
       move.headers.set('Authorization', _auth);
       move.headers.set('Destination', _uri(remoteName).toString());
       move.headers.set('Overwrite', 'T');

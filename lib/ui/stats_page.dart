@@ -97,14 +97,14 @@ class _StatsPageState extends State<StatsPage> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 40),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
         children: [
           _scopeBar(years, netByYear),
-          const SizedBox(height: 10),
+          const SizedBox(height: 14),
           _overview(sum, state),
           const SizedBox(height: 14),
           _dimensionSwitch(),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           ..._content(state, sum, crossSum),
         ],
       ),
@@ -121,13 +121,13 @@ class _StatsPageState extends State<StatsPage> {
     return Align(
       alignment: Alignment.centerLeft,
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         onTap: tappable ? () => _pickScope(years, netByYear) : null,
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: kSurface,
-            borderRadius: BorderRadius.circular(10),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: kDivider),
           ),
           child: Row(
@@ -145,7 +145,7 @@ class _StatsPageState extends State<StatsPage> {
               ),
               if (tappable) ...[
                 const SizedBox(width: 2),
-                Icon(Icons.expand_more, size: 18, color: kTextHint),
+                Icon(Icons.expand_more, size: 16, color: kTextHint),
               ],
             ],
           ),
@@ -185,10 +185,10 @@ class _StatsPageState extends State<StatsPage> {
         : (s.periodLabel.isEmpty ? '' : '覆盖 ${s.periodLabel} · ${s.recordCount} 笔');
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: kSeed,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(16),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -197,7 +197,7 @@ class _StatsPageState extends State<StatsPage> {
             children: [
               Text(title,
                   style: TextStyle(
-                      fontSize: 12, color: Colors.white.withOpacity(0.85))),
+                      fontSize: 13.5, color: Colors.white.withOpacity(0.9))),
               const Spacer(),
               if (sub.isNotEmpty)
                 Text(sub,
@@ -257,11 +257,7 @@ class _StatsPageState extends State<StatsPage> {
             style: TextStyle(
                 fontSize: 10.5, color: Colors.white.withOpacity(0.7))),
         const SizedBox(height: 3),
-        Text(displayCents(value),
-            style: const TextStyle(
-                fontSize: 13.5,
-                color: Colors.white,
-                fontWeight: FontWeight.w600)),
+        Text(displayCents(value), style: moneyStyle(size: 13.5, color: Colors.white)),
         if (hint != null)
           Text(hint,
               style: TextStyle(
@@ -403,8 +399,7 @@ class _StatsPageState extends State<StatsPage> {
                           child: Text(
                             displayCents(y.net),
                             textAlign: TextAlign.right,
-                            style: const TextStyle(
-                                fontSize: 12.5, fontWeight: FontWeight.w500),
+                            style: _amount(),
                           ),
                         ),
                       ],
@@ -442,7 +437,7 @@ class _StatsPageState extends State<StatsPage> {
     final years = s.byYear.map((e) => e.year).toList()..sort((a, b) => b.compareTo(a));
     if (s.isEmpty || years.isEmpty) {
       return Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
         decoration: cardDecoration(),
         child: Text('这个范围还没有数据',
             style: TextStyle(fontSize: 13, color: kTextSecondary)),
@@ -476,7 +471,7 @@ class _StatsPageState extends State<StatsPage> {
                   style: const ButtonStyle(
                     visualDensity: VisualDensity.compact,
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 11.5)),
+                    textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 12.5)),
                   ),
                   segments: const [
                     ButtonSegment(value: false, label: Text('折线')),
@@ -488,7 +483,7 @@ class _StatsPageState extends State<StatsPage> {
                 ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 8),
           Text(
             showMerged
                 ? '把每年的同一个月份加在一起看长期规律（会叠加不同年份）'
@@ -516,7 +511,7 @@ class _StatsPageState extends State<StatsPage> {
     return Align(
       alignment: Alignment.centerLeft,
       child: InkWell(
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(12),
         onTap: () async {
           final pick = await showYearPicker(
             context,
@@ -533,7 +528,7 @@ class _StatsPageState extends State<StatsPage> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: kSurfaceAlt,
-            borderRadius: BorderRadius.circular(15),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(color: kDivider),
           ),
           child: Row(
@@ -653,7 +648,7 @@ class _StatsPageState extends State<StatsPage> {
         Text(value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500)),
+            style: _amount()),
       ],
     );
   }
@@ -718,7 +713,7 @@ class _StatsPageState extends State<StatsPage> {
                   const Spacer(),
                   Text(
                     '合计 ${displayCents(m.net)} · 平均 ${displayCents(m.avgNet)}',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                    style: _amount(),
                   ),
                 ],
               ),
@@ -739,7 +734,8 @@ class _StatsPageState extends State<StatsPage> {
     final isIncome = category == kCategoryIncome;
     final list = isIncome ? s.incomeByItem : s.deductionByItem;
     final total = list.fold<int>(0, (a, e) => a + e.value);
-    final color = isIncome ? kIncome : kDeduction;
+    // 跟随主题的前景语义色：收入红、扣款绿（深色模式自动变亮）。
+    final color = isIncome ? kIncomeFg : kDeductionFg;
     final shown = _showAllItems ? list : list.take(10).toList();
 
     return Container(
@@ -750,22 +746,13 @@ class _StatsPageState extends State<StatsPage> {
         children: [
           Row(
             children: [
-              Container(
-                width: 3,
-                height: 13,
-                decoration: BoxDecoration(
-                    color: color, borderRadius: BorderRadius.circular(2)),
-              ),
+              _colorBar(color),
               const SizedBox(width: 8),
               Text(isIncome ? '钱从哪来' : '钱扣在哪',
                   style: const TextStyle(
                       fontSize: 14, fontWeight: FontWeight.w600)),
               const Spacer(),
-              Text(displayCents(total),
-                  style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w500,
-                      color: color)),
+              Text(displayCents(total), style: _amount(color: color)),
             ],
           ),
           const SizedBox(height: 8),
@@ -803,8 +790,7 @@ class _StatsPageState extends State<StatsPage> {
                     width: 92,
                     child: Text(displayCents(e.value),
                         textAlign: TextAlign.right,
-                        style: const TextStyle(
-                            fontSize: 12.5, fontWeight: FontWeight.w500)),
+                        style: _amount()),
                   ),
                 ],
               ),
@@ -825,7 +811,7 @@ class _StatsPageState extends State<StatsPage> {
     final rows = sum.netByEmployer;
     if (rows.isEmpty) {
       return Container(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
         decoration: cardDecoration(),
         child: Text('这个范围还没有记录',
             style: TextStyle(fontSize: 13, color: kTextSecondary)),
@@ -863,16 +849,9 @@ class _StatsPageState extends State<StatsPage> {
                   children: [
                     Row(
                       children: [
-                        Container(
-                          width: 3,
-                          height: 13,
-                          decoration: BoxDecoration(
-                            color: row.key == state.currentEmployerId
-                                ? kSeed
-                                : kBorder,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
+                        _colorBar(row.key == state.currentEmployerId
+                            ? kSeed
+                            : kBorder),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
@@ -886,9 +865,7 @@ class _StatsPageState extends State<StatsPage> {
                                 fontSize: 13, color: kTextBody),
                           ),
                         ),
-                        Text(displayCents(row.value),
-                            style: const TextStyle(
-                                fontSize: 12.5, fontWeight: FontWeight.w500)),
+                        Text(displayCents(row.value), style: _amount()),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -943,22 +920,11 @@ class _StatsPageState extends State<StatsPage> {
               padding: const EdgeInsets.symmetric(vertical: 6),
               child: Row(
                 children: [
-                  Container(
-                    width: 3,
-                    height: 13,
-                    decoration: BoxDecoration(
-                      color: kDeductionFg,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
+                  _colorBar(kIncomeFg),
                   const SizedBox(width: 8),
                   Expanded(
                       child: Text(e.key, style: const TextStyle(fontSize: 13))),
-                  Text(displayCents(e.value),
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: kDeductionFg)),
+                  Text(displayCents(e.value), style: _amount(color: kIncomeFg)),
                 ],
               ),
             ),
@@ -966,6 +932,34 @@ class _StatsPageState extends State<StatsPage> {
       ),
     );
   }
+
+  // ------------------------------------------------------------ 统一样式
+
+  /// 金额样式：等宽数字（逐位对齐，这是"金额列对不齐"的根因），
+  /// 全页金额统一走这里，字号只有 13（常规）/ 15（强调）两档。
+  TextStyle _amount({Color? color, bool strong = false}) => moneyStyle(
+        size: strong ? 15 : 13,
+        weight: strong ? FontWeight.w600 : FontWeight.w500,
+        color: color,
+      );
+
+  /// 统一的卡片标题行：左标题 14/w600，右侧可放汇总数值。
+  Widget _cardTitle(String text, {Widget? trailing}) => Row(
+        children: [
+          Text(text,
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const Spacer(),
+          if (trailing != null) trailing,
+        ],
+      );
+
+  /// 统一的小色条（项目 / 雇主卡左侧）。
+  Widget _colorBar(Color color) => Container(
+        width: 3,
+        height: 14,
+        decoration: BoxDecoration(
+            color: color, borderRadius: BorderRadius.circular(1.5)),
+      );
 }
 
 /// 月度折线图（自绘，不引入图表库）。

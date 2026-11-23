@@ -19,10 +19,11 @@ const kSeedSchemes = <SeedScheme>[
 ];
 
 /// 涨跌色、收入/扣款色是语义色，不随主色方案变，避免"收入突然变紫"这种困惑。
+/// 收入/扣款按中国习惯：收入红、扣款绿（涨红跌绿），全 App 统一走这两个常量。
 const Color kUp = Color(0xFFC62828);
 const Color kDown = Color(0xFF2E7D32);
-const Color kIncome = Color(0xFF2E7D6B);
-const Color kDeduction = Color(0xFFB45309);
+const Color kIncome = Color(0xFFC0392B); // 收入=红
+const Color kDeduction = Color(0xFF27834C); // 扣款=绿
 
 /// 调色板：把散落在各页面的硬编码颜色收敛成一组语义色。
 ///
@@ -73,9 +74,9 @@ class AppPalette {
       dark ? const Color(0xFF9FD8CC) : const Color(0xFF3D5A54);
 
   late final Color income =
-      dark ? const Color(0xFF6FCF97) : kIncome;
+      dark ? const Color(0xFFF0715F) : kIncome; // 收入=红，深色用亮红
   late final Color deduction =
-      dark ? const Color(0xFFE8A34A) : kDeduction;
+      dark ? const Color(0xFF5FCB8A) : kDeduction; // 扣款=绿，深色用亮绿
   late final Color extra =
       dark ? const Color(0xFFE8A34A) : const Color(0xFF7A4B12);
   late final Color extraBg =

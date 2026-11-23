@@ -17,8 +17,10 @@ class CloudAutoBackup {
   /// 同一时刻只允许跑一个上传，避免首页和 resume 同时触发传两遍
   static bool _running = false;
 
-  /// 距离上次**失败**至少隔这么久才重试，避免连不上网盘时每次打开都卡一下
-  static const _retryGap = Duration(hours: 6);
+  /// 距离上次**失败**至少隔这么久才重试，避免连不上网盘时每次打开都卡一下。
+  /// 原来是 6 小时 —— 一次超时后半天内都不再试，用户误以为备份坏了；
+  /// 缩短到 15 分钟，慢网失败后下次打开能较快自愈，又不至于每次都卡。
+  static const _retryGap = Duration(minutes: 15);
 
   /// 现在该不该备份
   static bool isDue(AppSettings s, DateTime now) {

@@ -18,7 +18,7 @@ class AppDb {
     final fullPath = p.join(dbPath, 'xinji.db');
     _db = await openDatabase(
       fullPath,
-      version: 6,
+      version: 7,
       onConfigure: (db) async {
         // 打开外键约束，保证删记录时级联清理明细/图片
         await db.execute('PRAGMA foreign_keys = ON');
@@ -43,7 +43,9 @@ class AppDb {
         net_cents INTEGER NOT NULL DEFAULT 0,
         extra TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        imported_at INTEGER,
+        source TEXT NOT NULL DEFAULT 'manual'
       )
     ''');
     await db.execute(
@@ -158,6 +160,11 @@ class AppDb {
       // v6：模板区分适用类型（月度 / 奖金与其他 / 通用）
       await _migrateV6(db);
     }
+    if (oldVersion < 7) {
+      // v7：记录「导入时间」和「来源」。只加列，不动任何已有数据 ——
+      // 老数据一条不删不改，新建列用 created_at 兜底，安全可回滚。
+      await _migrateV7(db);
+    }
     if (oldVersion < 3) {
       // v3：基本绩效改为「推算值」（它不在应发里，早年被当成收入会多算一遍）
       await _migrateV3(db);
@@ -170,6 +177,29 @@ class AppDb {
       // v5：发薪模板挂到雇主下（一家公司可以有多套模板，各自一套生效）
       await _migrateV5(db);
     }
+  }
+
+  /// v7 迁移：给每条记录加「导入/操作时间」和「来源」。
+  ///
+  /// 用户想知道"这条工资是什么时候导进来的"。原来只有 created_at（首次创建），
+  /// 但手动录入也写它、不区分来源，UI 也不展示。这次补两个字段：
+  /// - imported_at：导入/录入的时刻（毫秒）；老记录用 created_at 回填，语义近似。
+  /// - source：'import'（图片识别导入）/ 'manual'（手动录入）；老记录一律算 manual。
+  ///
+  /// 数据保护：只做 ALTER TABLE ADD COLUMN，用 [_hasColumn] 守卫保证幂等 ——
+  /// 即使重复执行也不会重复加列、不会碰任何已有行，老数据零丢失。
+  static Future<void> _migrateV7(Database db) async {
+    if (!await _hasColumn(db, 'pay_record', 'imported_at')) {
+      await db.execute(
+          'ALTER TABLE pay_record ADD COLUMN imported_at INTEGER');
+    }
+    if (!await _hasColumn(db, 'pay_record', 'source')) {
+      await db.execute(
+          "ALTER TABLE pay_record ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+    }
+    // 老记录的 imported_at 用 created_at 回填（只在为空时填，不覆盖已有值）
+    await db.rawUpdate(
+        'UPDATE pay_record SET imported_at = created_at WHERE imported_at IS NULL');
   }
 
   /// v6 迁移：给模板加「适用类型」。

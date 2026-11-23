@@ -6,6 +6,10 @@ import '../core/money.dart';
 const String kTypeMonthly = 'monthly';
 const String kTypeExtra = 'extra';
 
+/// 记录来源：图片识别导入 / 手动录入
+const String kSourceImport = 'import';
+const String kSourceManual = 'manual';
+
 /// 明细分类
 const String kCategoryIncome = 'income';
 const String kCategoryDeduction = 'deduction';
@@ -59,6 +63,12 @@ class PayRecord {
   final int createdAt;
   final int updatedAt;
 
+  /// 导入/录入的时刻（毫秒）。老记录由 migration 用 created_at 回填。
+  final int? importedAt;
+
+  /// 来源：kSourceImport（图片识别）/ kSourceManual（手动录入）
+  final String source;
+
   /// 加载后填充，不落库
   List<PayItem> items;
   List<PayImage> images;
@@ -79,6 +89,8 @@ class PayRecord {
     this.extra,
     required this.createdAt,
     required this.updatedAt,
+    this.importedAt,
+    this.source = kSourceManual,
     this.items = const [],
     this.images = const [],
     this.infos = const [],
@@ -110,6 +122,8 @@ class PayRecord {
         'extra': extra == null ? null : jsonEncode(extra),
         'created_at': createdAt,
         'updated_at': updatedAt,
+        'imported_at': importedAt,
+        'source': source,
       };
 
   factory PayRecord.fromMap(Map<String, Object?> m) {
@@ -135,6 +149,8 @@ class PayRecord {
       extra: extraMap,
       createdAt: (m['created_at'] as int?) ?? 0,
       updatedAt: (m['updated_at'] as int?) ?? 0,
+      importedAt: m['imported_at'] as int?,
+      source: (m['source'] as String?) ?? kSourceManual,
     );
   }
 
@@ -150,6 +166,8 @@ class PayRecord {
     int? netCents,
     Map<String, dynamic>? extra,
     int? updatedAt,
+    int? importedAt,
+    String? source,
     List<PayItem>? items,
     List<PayImage>? images,
     List<PayInfo>? infos,
@@ -167,6 +185,8 @@ class PayRecord {
       extra: extra ?? this.extra,
       createdAt: createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      importedAt: importedAt ?? this.importedAt,
+      source: source ?? this.source,
       items: items ?? this.items,
       images: images ?? this.images,
       infos: infos ?? this.infos,
@@ -404,6 +424,14 @@ class ItemTemplate {
     for (final a in aliases) {
       final k = normalizeName(a);
       if (k.isNotEmpty) s.add(k);
+    }
+    // 加字符多重集签名，容忍 OCR 折行拼错顺序的乱序名。
+    // 例如模板「休息日加班时数」能对上识别结果「数休息日加班时」。
+    final sig = nameSignature(name);
+    if (sig.isNotEmpty) s.add(sig);
+    for (final a in aliases) {
+      final sig = nameSignature(a);
+      if (sig.isNotEmpty) s.add(sig);
     }
     return s;
   }

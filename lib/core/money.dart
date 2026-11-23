@@ -176,6 +176,16 @@ String normalizeName(String raw) {
   return s;
 }
 
+/// 字符多重集签名：把归一化后的字符排序拼成串，用来容忍 OCR 把项目名折行后
+/// 拼错顺序（「数休息日加班时」与「休息日加班时数」的字符集合完全相同）。
+/// 加 `sig:` 前缀避免和普通项目名撞车；只在匹配候选里用，不作存储键。
+String nameSignature(String raw) {
+  final n = normalizeName(raw);
+  if (n.isEmpty) return '';
+  final chars = n.split('')..sort();
+  return 'sig:${chars.join()}';
+}
+
 /// 一个项目名的几种等价写法，用于匹配模板里的别名。
 ///
 /// 「2025年终奖金」这串有两种读法：年份前缀「2025年」+「终奖金」，
@@ -199,6 +209,10 @@ List<String> nameVariants(String raw) {
       if (m.group(0)!.endsWith('年')) out.add('年$rest');
     }
   }
+  // 字符多重集签名：容忍 OCR 折行后拼错顺序的乱序名（「数休息日加班时」）。
+  // 注意签名只在双方都算时才对得上，模板侧见 TemplateItem._buildMatchTargets。
+  final sig = nameSignature(n);
+  if (sig.isNotEmpty) out.add(sig);
   final result = out.toList();
   if (_variantsCache.length < _nameCacheMax) _variantsCache[raw] = result;
   return result;

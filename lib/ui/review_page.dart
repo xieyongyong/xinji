@@ -740,6 +740,12 @@ class _ReviewPageState extends State<ReviewPage> {
     final state = context.read<AppState>();
     final now = DateTime.now().millisecondsSinceEpoch;
 
+    // 来源：从 OCR 结果或图片进入 = 识别导入；空白新建 = 手动录入。
+    // 编辑已有记录时保留原来源和原导入时间，不被覆盖。
+    final isImport = widget.outcome != null || widget.initialImagePaths.isNotEmpty;
+    final source = widget.editing?.source ??
+        (isImport ? kSourceImport : kSourceManual);
+
     final record = PayRecord(
       id: widget.editing?.id,
       employerId: _employerId,
@@ -753,6 +759,8 @@ class _ReviewPageState extends State<ReviewPage> {
       extra: _noteCtrl.text.trim().isEmpty ? null : {'note': _noteCtrl.text.trim()},
       createdAt: widget.editing?.createdAt ?? now,
       updatedAt: now,
+      importedAt: widget.editing?.importedAt ?? now,
+      source: source,
     );
 
     // 明细落库顺序：按模板字段顺序（收入在前、扣款在后）。
@@ -1507,7 +1515,7 @@ class _ReviewPageState extends State<ReviewPage> {
                       Icon(Icons.calculate_outlined, size: 14, color: kSeed),
                       const SizedBox(width: 5),
                       Text(
-                        '按明细重算（$_items.length 项）',
+                        '按明细重算（${_items.length} 项）',
                         style: TextStyle(fontSize: 12, color: kSeed),
                       ),
                     ],

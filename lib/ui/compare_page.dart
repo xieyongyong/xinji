@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../core/app_settings.dart';
 import '../core/money.dart';
+import '../data/models.dart';
 import '../state/app_state.dart';
 import '../stats/salary_stats.dart';
 import 'theme.dart';
@@ -14,7 +15,9 @@ import 'theme.dart';
 /// 2. 除了钱，还比**绩效系数**和**信息项**（部门、应出勤天数…）——
 ///    "绩效工资少了 800" 往往答案在系数上，只有金额对比看不出来。
 ///
-/// 只比「月度工资」。年终奖这类一次性收入混进月度环比会严重失真。
+/// 两种对比模式：
+/// - 「月度工资」：逐项环比（收入/扣款/系数/信息项），奖金不掺进来以免失真；
+/// - 「奖金」：两笔额外收入对比（按记录选，因为奖金不定期、同月可多笔）。
 class ComparePage extends StatefulWidget {
   /// 进来时优先看哪一年（可空：空则取最近两期）
   final int? year;
@@ -22,16 +25,31 @@ class ComparePage extends StatefulWidget {
   /// 进来时 B 侧优先看这个月（从统计页点柱子进来时用）
   final int? focusMonth;
 
-  const ComparePage({super.key, this.year, this.focusMonth});
+  /// 进来时默认模式：extra = 奖金对比
+  final bool initialExtra;
+
+  const ComparePage({
+    super.key,
+    this.year,
+    this.focusMonth,
+    this.initialExtra = false,
+  });
 
   @override
   State<ComparePage> createState() => _ComparePageState();
 }
 
 class _ComparePageState extends State<ComparePage> {
-  /// 期间键：year * 100 + month
+  /// false = 月度工资对比，true = 奖金对比
+  late bool _extraMode = widget.initialExtra;
+
+  /// 期间键：year * 100 + month（月度模式）
   int? _keyA;
   int? _keyB;
+
+  /// 奖金记录 id（奖金模式）
+  int? _extraIdA;
+  int? _extraIdB;
 
   /// 哪些卡片展开了"无变化项目"
   final Set<String> _expandedGroups = {};
@@ -44,6 +62,9 @@ class _ComparePageState extends State<ComparePage> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final employerName = state.currentEmployer?.name;
+
+    // 奖金模式：两笔额外收入对比
+    if (_extraMode) return _buildExtraCompare(state, employerName);
 
     // 只看当前雇主，且只看有月度工资的期
     final periods = StatsBuilder.buildPeriods(state.scopedRecords)
@@ -87,7 +108,7 @@ class _ComparePageState extends State<ComparePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('月份对比'),
+        title: _modeSwitch(),
         bottom: employerName == null
             ? null
             : PreferredSize(
@@ -778,6 +799,278 @@ class _ComparePageState extends State<ComparePage> {
           if (d.changed)
             Text('已变化',
                 style: TextStyle(fontSize: 10.5, color: kSeed)),
+        ],
+      ),
+    );
+  }
+
+  // ------------------------------------------------------------ 模式切换
+
+  Widget _modeSwitch() {
+    return SegmentedButton<bool>(
+      showSelectedIcon: false,
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      segments: const [
+        ButtonSegment(value: false, label: Text('月度工资')),
+        ButtonSegment(value: true, label: Text('奖金')),
+      ],
+      selected: {_extraMode},
+      onSelectionChanged: (s) => setState(() => _extraMode = s.first),
+    );
+  }
+
+  // ------------------------------------------------------------ 奖金对比
+
+  Widget _buildExtraCompare(AppState state, String? employerName) {
+    // 奖金 = 额外收入记录。按月/名目排列，供两笔互相比。
+    final extras = state.scopedRecords
+        .where((r) => r.recordType == kTypeExtra)
+        .toList()
+      ..sort((a, b) => b.sortKey.compareTo(a.sortKey));
+    final ids = extras.map((r) => r.id).whereType<int>().toList();
+
+    Widget empty(String msg) => Scaffold(
+          appBar: AppBar(title: _modeSwitch(), bottom: employerName == null
+              ? null
+              : PreferredSize(
+                  preferredSize: const Size.fromHeight(20),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Text('$employerName · 两笔奖金逐项对比',
+                        style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
+                  ),
+                )),
+          body: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.card_giftcard_outlined, size: 40, color: kTextFaint),
+                  const SizedBox(height: 14),
+                  Text(msg,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          fontSize: 13.5, color: kTextSecondary, height: 1.6)),
+                ],
+              ),
+            ),
+          ),
+        );
+
+    if (extras.length < 2) {
+      return empty(extras.isEmpty
+          ? '还没有奖金 / 额外收入记录'
+          : '只有一笔奖金，至少要两笔才能对比');
+    }
+
+    // 默认 B 取最新一笔，A 取次新；无效 id（如新记录还没存库）回退到默认
+    final bId = _extraIdB != null && ids.contains(_extraIdB)
+        ? _extraIdB!
+        : ids.first;
+    final aId = _extraIdA != null && ids.contains(_extraIdA) && _extraIdA != bId
+        ? _extraIdA!
+        : (ids.length > 1 ? ids[1] : ids.first);
+
+    final a = extras.firstWhere((r) => r.id == aId);
+    final b = extras.firstWhere((r) => r.id == bId);
+    final diff = b.netCents - a.netCents;
+    final color = _settings.diffColor(diff);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: _modeSwitch(),
+        bottom: employerName == null
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(20),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text('$employerName · 两笔奖金逐项对比',
+                      style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
+                ),
+              ),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
+        children: [
+          Row(
+            children: [
+              Expanded(
+                  child: _extraField('对比基准（早）', a, extras, bId,
+                      (v) => setState(() => _extraIdA = v))),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 16, 10, 0),
+                child: Icon(Icons.arrow_forward, size: 18, color: kTextHint),
+              ),
+              Expanded(
+                  child: _extraField('对比奖金（晚）', b, extras, aId,
+                      (v) => setState(() => _extraIdB = v))),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: kSeed,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(diff == 0 ? '两笔实发持平' : (diff > 0 ? '后一笔多拿' : '后一笔少拿'),
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.white.withOpacity(0.85))),
+                const SizedBox(height: 6),
+                Text(displayCents(diff, withSign: true),
+                    style: moneyStyle(size: 28, color: Colors.white)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          _cardShell(
+            title: '金额变化',
+            color: color,
+            trailing: '实发差额',
+            children: [
+              _extraRow('应发', a.grossCents, b.grossCents),
+              const Divider(height: 16),
+              _extraRow('代扣', a.deductionCents, b.deductionCents),
+              const Divider(height: 16),
+              _extraRow('实发', a.netCents, b.netCents),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _cardShell(
+            title: '基本信息',
+            color: kSeed,
+            trailing: '两笔对比',
+            children: [
+              _infoRow('名目', a.displayTitle, b.displayTitle),
+              _infoRow('期间', '${a.periodYear}-${a.periodMonth}',
+                  '${b.periodYear}-${b.periodMonth}'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '奖金不定期发放、同月可能多笔，因此按记录对比而非按月份。'
+            '金额变多/变少用不同颜色区分（红涨绿跌，可在设置里改配色）。',
+            style: TextStyle(fontSize: 11, color: kTextHint, height: 1.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _extraField(String label, PayRecord current, List<PayRecord> extras,
+      int otherId, ValueChanged<int> onPicked) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11.5, color: kTextSecondary)),
+        const SizedBox(height: 4),
+        InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () async {
+            final picked = await showModalBottomSheet<int>(
+              context: context,
+              showDragHandle: true,
+              backgroundColor: kSurface,
+              builder: (ctx) => SafeArea(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final r in extras)
+                      if (r.id != null && r.id != otherId)
+                        ListTile(
+                          title: Text(r.displayTitle,
+                              style: const TextStyle(fontSize: 13)),
+                          subtitle: Text(displayCents(r.netCents),
+                              style: TextStyle(fontSize: 11.5, color: kTextHint)),
+                          onTap: () => Navigator.pop(ctx, r.id),
+                        ),
+                  ],
+                ),
+              ),
+            );
+            if (picked != null) onPicked(picked);
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            decoration: BoxDecoration(
+              color: kSurface,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: kDivider),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    current.displayTitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 13, color: kTextPrimary),
+                  ),
+                ),
+                Icon(Icons.expand_more, size: 18, color: kTextHint),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _extraRow(String label, int a, int b) {
+    final diff = b - a;
+    final color = _settings.diffColor(diff);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 7),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 48,
+            child: Text(label,
+                style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
+          ),
+          Expanded(
+            child: Text('${displayCents(a)} → ${displayCents(b)}',
+                style: TextStyle(fontSize: 13, color: kTextBody)),
+          ),
+          Text(diff == 0 ? '持平' : displayCents(diff, withSign: true),
+              style: TextStyle(
+                  fontSize: 13, color: color, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String a, String b) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 48,
+            child: Text(label,
+                style: TextStyle(fontSize: 12.5, color: kTextSecondary)),
+          ),
+          Expanded(
+            child: Text(a,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: kTextBody)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(b,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, color: kTextBody)),
+          ),
         ],
       ),
     );

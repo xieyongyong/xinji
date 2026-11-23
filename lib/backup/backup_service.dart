@@ -105,9 +105,6 @@ class BackupService {
 
   static const MethodChannel _channel = MethodChannel('xinji/app');
 
-  /// 备份文件信息（供「本地备份管理」列表用）
-  static const _tmpPrefix = '.tmp_';
-
   /// 导出到公共 Download 目录（用户能在文件管理器里直接看到、删掉）。
   ///
   /// 流程：生成字节 → 写 cache 临时文件 → 原生用 MediaStore 复制到公共 Download。
@@ -143,39 +140,6 @@ class BackupService {
       }
       throw BackupException('保存到下载目录失败：${e.message ?? e.code}');
     }
-  }
-
-  /// 列出私有 backups/ 目录里残留的历史备份（含大小、修改时间）。
-  /// 新导出已走公共 Download，这里主要是让用户能清理以前累积的旧备份。
-  Future<List<BackupFileMeta>> listLocalBackups() async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final backupDir = Directory(p.join(docsDir.path, 'backups'));
-    if (!await backupDir.exists()) return [];
-    final out = <BackupFileMeta>[];
-    await for (final ent in backupDir.list(followLinks: false)) {
-      if (ent is! File) continue;
-      final name = p.basename(ent.path);
-      // 跳过临时文件和非备份文件
-      if (name.startsWith(_tmpPrefix)) continue;
-      if (!name.endsWith('.zip') && !name.endsWith('.xbk')) continue;
-      final st = await ent.stat();
-      out.add(BackupFileMeta(
-        path: ent.path,
-        name: name,
-        size: st.size,
-        modified: st.modified,
-      ));
-    }
-    out.sort((a, b) => b.modified.compareTo(a.modified));
-    return out;
-  }
-
-  /// 删除单个本地备份文件。返回是否真的删掉了。
-  Future<bool> deleteLocalBackup(String path) async {
-    final f = File(path);
-    if (!await f.exists()) return false;
-    await f.delete();
-    return true;
   }
 
   String _stamp(DateTime now) =>
@@ -345,7 +309,7 @@ class BackupService {
         final m = _sanitize(r, const {
           'id', 'employer_id', 'period_year', 'period_month', 'record_type',
           'record_label', 'gross_cents', 'deduction_cents', 'net_cents', 'extra',
-          'created_at', 'updated_at',
+          'created_at', 'updated_at', 'imported_at', 'source',
         });
         if (m['employer_id'] == null) {
           m['employer_id'] = fallbackEmployerId ?? anyEmployerId;
@@ -679,20 +643,6 @@ class DownloadExportResult {
     required this.shownPath,
     required this.sharePath,
     required this.size,
-  });
-}
-
-/// 私有备份目录里的一份备份文件（供「本地备份管理」列表展示）
-class BackupFileMeta {
-  final String path;
-  final String name;
-  final int size;
-  final DateTime modified;
-  BackupFileMeta({
-    required this.path,
-    required this.name,
-    required this.size,
-    required this.modified,
   });
 }
 
