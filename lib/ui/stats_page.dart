@@ -906,25 +906,80 @@ class _StatsPageState extends State<StatsPage> {
   // ------------------------------------------------------------ 奖金
 
   Widget _extraCard(RangeSummary s) {
+    final groups = s.extraByLabelAndYear;
+    final total = groups.fold<int>(0, (sum, g) => sum + g.total);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
       decoration: cardDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('奖金 / 额外收入',
-              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              _colorBar(kIncomeFg),
+              const SizedBox(width: 8),
+              const Text('奖金 / 额外收入',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              const Spacer(),
+              Text(displayCents(total), style: _amount(color: kIncomeFg)),
+            ],
+          ),
           const SizedBox(height: 8),
-          for (final e in s.extraByLabel)
+          for (final g in groups)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _colorBar(kIncomeFg),
-                  const SizedBox(width: 8),
-                  Expanded(
-                      child: Text(e.key, style: const TextStyle(fontSize: 13))),
-                  Text(displayCents(e.value), style: _amount(color: kIncomeFg)),
+                  // 主行：名目 + 小计。宽度/对齐与项目卡 _itemCard 一致。
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          g.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 13, color: kTextBody),
+                        ),
+                      ),
+                      SizedBox(
+                        width: 92,
+                        child: Text(
+                          displayCents(g.total),
+                          textAlign: TextAlign.right,
+                          style: _amount(color: kIncomeFg),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // 年份副行：近年在前，缩进对齐，小字弱化。
+                  for (final y in g.years)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${y.year} 年',
+                              style: TextStyle(
+                                  fontSize: 11.5, color: kTextHint),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 92,
+                            child: Text(
+                              displayCents(y.net),
+                              textAlign: TextAlign.right,
+                              style: moneyStyle(
+                                size: 11.5,
+                                weight: FontWeight.w400,
+                                color: kTextSecondary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),

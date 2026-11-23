@@ -1,5 +1,3 @@
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -158,6 +156,24 @@ class _HomePageState extends State<HomePage>
     await context.read<AppState>().reload();
   }
 
+  /// 底部圆形悬浮按钮：主题色半透明底 + 白色图标。
+  /// hero 必须两者不同，否则 Flutter 会报「多个 FAB 共用同一个 hero tag」。
+  Widget _roundFab({
+    required String hero,
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onPressed,
+  }) {
+    return FloatingActionButton(
+      heroTag: hero,
+      tooltip: tooltip,
+      onPressed: onPressed,
+      backgroundColor: kSeed.withOpacity(0.88),
+      foregroundColor: Colors.white,
+      child: Icon(icon, size: 26),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -181,8 +197,7 @@ class _HomePageState extends State<HomePage>
     // 已经离职的雇主不该再提醒"这个月还没录入"
     final stillActive = employer == null || employer.covers(now.year, now.month);
 
-    // 跟手位移对应的渐显进度（0→1）与高斯模糊强度。静止时为 0，不挂滤镜，
-    // 只有滑动过程中才短暂模糊主页，避免常驻 BackdropFilter 的性能开销。
+    // 跟手位移对应的渐显进度（0→1）：静止为 0，只用于底层预览层渐显。
     final swipeProgress =
         (_swipeDx.abs() / (MediaQuery.of(context).size.width / 3))
             .clamp(0.0, 1.0)
@@ -256,7 +271,9 @@ class _HomePageState extends State<HomePage>
           ),
         ],
       ),
-      // 圆形加号按钮：向下滚看历史时缩没，回到顶部时弹回来（钱迹式）。
+      // 底部两个圆形按钮：左下「回到本月」、右下「导入」，主题色半透明。
+      // 向下滚看历史时一起缩没，回到顶部时一起弹回来（钱迹式）。
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: AnimatedScale(
         scale: _fabVisible ? 1 : 0,
         duration: const Duration(milliseconds: 220),
@@ -264,10 +281,25 @@ class _HomePageState extends State<HomePage>
         child: AnimatedOpacity(
           opacity: _fabVisible ? 1 : 0,
           duration: const Duration(milliseconds: 160),
-          child: FloatingActionButton(
-            tooltip: '导入工资条',
-            onPressed: () => _open(const ImportPage()),
-            child: const Icon(Icons.add, size: 28),
+          child: SizedBox(
+            width: MediaQuery.of(context).size.width - 32,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                _roundFab(
+                  hero: 'fab_this_month',
+                  tooltip: '回到本月（重新定位到当前月份）',
+                  icon: Icons.my_location,
+                  onPressed: _goToThisMonth,
+                ),
+                _roundFab(
+                  hero: 'fab_import',
+                  tooltip: '导入工资条',
+                  icon: Icons.add,
+                  onPressed: () => _open(const ImportPage()),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -278,7 +310,7 @@ class _HomePageState extends State<HomePage>
       children: [
         // 底层双向预览：左滑露统计（右）、右滑露设置（左），跟手渐显。
         Positioned.fill(child: _swipeReveal(swipeProgress)),
-        // 上层主页：跟手平移 + 高斯模糊。静止时 sigma=0 不挂滤镜。
+        // 上层主页：跟手平移。去掉高斯模糊，只平移露出底层预览层。
         Transform.translate(
           offset: Offset(_swipeDx, 0),
           child: DecoratedBox(
@@ -295,19 +327,6 @@ class _HomePageState extends State<HomePage>
                   onHorizontalDragEnd: _onSwipeEnd,
                   child: home,
                 ),
-                // 只在滑动中出现的模糊层：盖住主页，露出下方清晰预览层。
-                if (swipeProgress > 0)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(
-                          sigmaX: swipeProgress * 6,
-                          sigmaY: swipeProgress * 6,
-                        ),
-                        child: const SizedBox.expand(),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),
@@ -526,13 +545,7 @@ class _HomePageState extends State<HomePage>
                 ? () => setState(() => _year = year + 1)
                 : null,
           ),
-          // 回到本月：不论当前翻到哪一年，一键跳回「今年 + 本月」并把该月卡片滚到可见。
-          // 和左右箭头/年份弹窗是不同用途 —— 那两个是浏览历史，这个是随时归位。
-          IconButton(
-            tooltip: '回到本月（重新定位到当前月份）',
-            icon: const Icon(Icons.my_location, size: 20),
-            onPressed: _goToThisMonth,
-          ),
+          // 回到本月已移到左下悬浮按钮，和右下导入按钮对称。
         ],
       ),
     );

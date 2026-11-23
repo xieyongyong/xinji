@@ -50,6 +50,25 @@ class YearAgg {
   int get avgNet => months == 0 ? 0 : (monthlyNet / months).round();
 }
 
+/// 奖金某一名目下、某一年的一份汇总。
+class ExtraYearAgg {
+  final int year;
+  final int net;
+  const ExtraYearAgg({required this.year, required this.net});
+}
+
+/// 奖金按名目汇总，名目内再按年份拆开（近年在前）。
+class ExtraLabelAgg {
+  final String label;
+  final int total;
+  final List<ExtraYearAgg> years;
+  const ExtraLabelAgg({
+    required this.label,
+    required this.total,
+    required this.years,
+  });
+}
+
 /// 任意范围的汇总（全部年份 / 某一年）。
 ///
 /// 之所以单独做一层，是因为原来只有 [YearSummary]：只能一年年看，
@@ -70,6 +89,7 @@ class RangeSummary {
   List<PayRecord>? _monthlyCache, _extrasCache;
   String? _periodLabel;
   List<MapEntry<String, int>>? _incomeByItem, _deductionByItem, _extraByLabel;
+  List<ExtraLabelAgg>? _extraByLabelAndYear;
   List<YearAgg>? _byYear;
   List<MonthAgg>? _byMonthOfYear;
   List<MapEntry<int, int>>? _netByEmployer;
@@ -205,6 +225,32 @@ class RangeSummary {
       map[label] = (map[label] ?? 0) + r.netCents;
     }
     return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  }
+
+  /// 奖金按名目汇总，名目内再按年份拆开展示。
+  /// 名目之间仍按小计金额降序；每个名目的年份近年在前，
+  /// 让「同一个名目哪年拿过、各多少」一眼可见。
+  List<ExtraLabelAgg> get extraByLabelAndYear =>
+      _extraByLabelAndYear ??= _buildExtraByLabelAndYear();
+
+  List<ExtraLabelAgg> _buildExtraByLabelAndYear() {
+    // label -> (year -> net)
+    final grouped = <String, Map<int, int>>{};
+    for (final r in _extras) {
+      final label = (r.recordLabel ?? '其他收入').trim();
+      final byYear = grouped.putIfAbsent(label, () => <int, int>{});
+      byYear[r.periodYear] = (byYear[r.periodYear] ?? 0) + r.netCents;
+    }
+    final out = grouped.entries.map((e) {
+      final years = e.value.entries
+          .map((y) => ExtraYearAgg(year: y.key, net: y.value))
+          .toList()
+        ..sort((a, b) => b.year.compareTo(a.year)); // 近年在前
+      final total = years.fold<int>(0, (s, y) => s + y.net);
+      return ExtraLabelAgg(label: e.key, total: total, years: years);
+    }).toList()
+      ..sort((a, b) => b.total.compareTo(a.total)); // 名目按小计降序
+    return out;
   }
 
   /// 按雇主汇总（跨雇主的总计才用得上）
