@@ -393,13 +393,27 @@ class _HomePageState extends State<HomePage>
 
     // 左滑（负）→ 统计；右滑（正）→ 设置。
     _swipeTargetPage = dx < 0 ? const StatsPage() : const SettingsPage();
-    // 顺势滑完到目标侧 1/3 屏，动画尾 push 目标页；pop 返回后复位到 0。
+    // 顺势滑完到目标侧 1/3 屏，动画尾 push 目标页。
     _animateSwipeBack(to: dx < 0 ? -limit : limit, onDone: () {
       if (!mounted) return;
       final page = _swipeTargetPage ?? const SettingsPage();
       _swipeTargetPage = null;
-      _open(page).then((_) {
-        if (mounted) setState(() => _swipeDx = 0);
+      // 进入要动画、返回不要过渡：push 动画一结束（新页已完全盖住主页）
+      // 就把主页静默归零。不能像原来那样等 pop 返回才复位 ——
+      // 那样从设置/统计返回时会看到主页偏着、底下预览层露出的那一瞬过渡。
+      final route = MaterialPageRoute(builder: (_) => page);
+      Navigator.of(context).push(route).then((_) async {
+        if (!mounted) return;
+        // 兜底：push 动画没走完就快速返回时，复位仍要保证。
+        if (_swipeDx != 0) setState(() => _swipeDx = 0);
+        await context.read<AppState>().reload();
+      });
+      // push 之后 route.animation 才挂上；进入动画一结束（新页完全盖住主页）
+      // 就把主页静默归零，返回时便是正常位，不露预览层、没有过渡。
+      route.animation?.addStatusListener((status) {
+        if (status == AnimationStatus.completed && mounted && _swipeDx != 0) {
+          setState(() => _swipeDx = 0);
+        }
       });
     });
   }
@@ -454,7 +468,11 @@ class _HomePageState extends State<HomePage>
             const SizedBox(height: 10),
             Text(label,
                 style: const TextStyle(
-                    fontSize: 18, color: Colors.white, fontWeight: FontWeight.w600)),
+                    fontSize: 18,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    // 静态预览文字：任何来源的下划线都不要（含主题继承）。
+                    decoration: TextDecoration.none)),
           ],
         ),
       ),

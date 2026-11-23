@@ -50,22 +50,22 @@ class YearAgg {
   int get avgNet => months == 0 ? 0 : (monthlyNet / months).round();
 }
 
-/// 奖金某一名目下、某一年的一份汇总。
-class ExtraYearAgg {
-  final int year;
+/// 某一年下、某一名目的奖金金额。
+class ExtraLabelInYear {
+  final String label;
   final int net;
-  const ExtraYearAgg({required this.year, required this.net});
+  const ExtraLabelInYear({required this.label, required this.net});
 }
 
-/// 奖金按名目汇总，名目内再按年份拆开（近年在前）。
-class ExtraLabelAgg {
-  final String label;
+/// 奖金按年份汇总（近年在前），每一年内再按名目拆开。
+class ExtraYearGroup {
+  final int year;
   final int total;
-  final List<ExtraYearAgg> years;
-  const ExtraLabelAgg({
-    required this.label,
+  final List<ExtraLabelInYear> labels;
+  const ExtraYearGroup({
+    required this.year,
     required this.total,
-    required this.years,
+    required this.labels,
   });
 }
 
@@ -89,7 +89,7 @@ class RangeSummary {
   List<PayRecord>? _monthlyCache, _extrasCache;
   String? _periodLabel;
   List<MapEntry<String, int>>? _incomeByItem, _deductionByItem, _extraByLabel;
-  List<ExtraLabelAgg>? _extraByLabelAndYear;
+  List<ExtraYearGroup>? _extraByYear;
   List<YearAgg>? _byYear;
   List<MonthAgg>? _byMonthOfYear;
   List<MapEntry<int, int>>? _netByEmployer;
@@ -227,30 +227,30 @@ class RangeSummary {
     return map.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
   }
 
-  /// 奖金按名目汇总，名目内再按年份拆开展示。
-  /// 名目之间仍按小计金额降序；每个名目的年份近年在前，
-  /// 让「同一个名目哪年拿过、各多少」一眼可见。
-  List<ExtraLabelAgg> get extraByLabelAndYear =>
-      _extraByLabelAndYear ??= _buildExtraByLabelAndYear();
+  /// 奖金按年份汇总（近年在前），每一年内再按名目拆开（金额降序）。
+  /// 用户诉求是「按时间降序」：先看今年拿了哪些奖，再看去年 —— 年份是主轴，
+  /// 名目只作为该年下的细分，不再拿名目小计去抢主排序。
+  List<ExtraYearGroup> get extraByYear =>
+      _extraByYear ??= _buildExtraByYear();
 
-  List<ExtraLabelAgg> _buildExtraByLabelAndYear() {
-    // label -> (year -> net)
-    final grouped = <String, Map<int, int>>{};
+  List<ExtraYearGroup> _buildExtraByYear() {
+    // year -> (label -> net)
+    final grouped = <int, Map<String, int>>{};
     for (final r in _extras) {
+      final byLabel =
+          grouped.putIfAbsent(r.periodYear, () => <String, int>{});
       final label = (r.recordLabel ?? '其他收入').trim();
-      final byYear = grouped.putIfAbsent(label, () => <int, int>{});
-      byYear[r.periodYear] = (byYear[r.periodYear] ?? 0) + r.netCents;
+      byLabel[label] = (byLabel[label] ?? 0) + r.netCents;
     }
-    final out = grouped.entries.map((e) {
-      final years = e.value.entries
-          .map((y) => ExtraYearAgg(year: y.key, net: y.value))
+    final years = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    return years.map((y) {
+      final labels = grouped[y]!.entries
+          .map((e) => ExtraLabelInYear(label: e.key, net: e.value))
           .toList()
-        ..sort((a, b) => b.year.compareTo(a.year)); // 近年在前
-      final total = years.fold<int>(0, (s, y) => s + y.net);
-      return ExtraLabelAgg(label: e.key, total: total, years: years);
-    }).toList()
-      ..sort((a, b) => b.total.compareTo(a.total)); // 名目按小计降序
-    return out;
+        ..sort((a, b) => b.net.compareTo(a.net)); // 年内名目按金额降序
+      final total = labels.fold<int>(0, (s, l) => s + l.net);
+      return ExtraYearGroup(year: y, total: total, labels: labels);
+    }).toList();
   }
 
   /// 按雇主汇总（跨雇主的总计才用得上）

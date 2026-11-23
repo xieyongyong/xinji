@@ -906,7 +906,7 @@ class _StatsPageState extends State<StatsPage> {
   // ------------------------------------------------------------ 奖金
 
   Widget _extraCard(RangeSummary s) {
-    final groups = s.extraByLabelAndYear;
+    final groups = s.extraByYear;
     final total = groups.fold<int>(0, (sum, g) => sum + g.total);
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
@@ -925,23 +925,22 @@ class _StatsPageState extends State<StatsPage> {
             ],
           ),
           const SizedBox(height: 8),
+          // 年份为主轴：2026 → 2025 → 2024，每年一个小节。
           for (final g in groups)
             Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
+              padding: const EdgeInsets.only(top: 8, bottom: 2),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 主行：名目 + 小计。宽度/对齐与项目卡 _itemCard 一致。
+                  // 年份行：年份 + 该年奖金合计，宽度/对齐与项目卡一致。
                   Row(
                     children: [
-                      Expanded(
-                        child: Text(
-                          g.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 13, color: kTextBody),
-                        ),
-                      ),
+                      Text('${g.year} 年',
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: kTextPrimary)),
+                      const Spacer(),
                       SizedBox(
                         width: 92,
                         child: Text(
@@ -952,23 +951,26 @@ class _StatsPageState extends State<StatsPage> {
                       ),
                     ],
                   ),
-                  // 年份副行：近年在前，缩进对齐，小字弱化。
-                  for (final y in g.years)
+                  const SizedBox(height: 3),
+                  // 名目副行：该年拿到的各奖金名目，缩进对齐、小字弱化。
+                  for (final l in g.labels)
                     Padding(
-                      padding: const EdgeInsets.only(top: 3),
+                      padding: const EdgeInsets.only(top: 3, left: 10),
                       child: Row(
                         children: [
                           Expanded(
                             child: Text(
-                              '${y.year} 年',
-                              style: TextStyle(
-                                  fontSize: 11.5, color: kTextHint),
+                              l.label,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style:
+                                  TextStyle(fontSize: 11.5, color: kTextHint),
                             ),
                           ),
                           SizedBox(
                             width: 92,
                             child: Text(
-                              displayCents(y.net),
+                              displayCents(l.net),
                               textAlign: TextAlign.right,
                               style: moneyStyle(
                                 size: 11.5,
