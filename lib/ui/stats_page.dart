@@ -216,8 +216,9 @@ class _StatsPageState extends State<StatsPage> {
               _vline(),
               Expanded(child: _block('奖金 / 额外', s.extraNet)),
               _vline(),
+              // 月数并进标题，三列都是「标题 + 金额」两行，底部对齐。
               Expanded(
-                child: _block('月均', s.avgNet, hint: '${s.monthCount} 个月'),
+                child: _block('月均 · ${s.monthCount}个月', s.avgNet),
               ),
             ],
           ),
@@ -249,7 +250,8 @@ class _StatsPageState extends State<StatsPage> {
   Widget _vline() =>
       Container(width: 1, height: 30, color: Colors.white.withOpacity(0.18));
 
-  Widget _block(String label, int value, {String? hint}) {
+  /// 三列统一的「标题 + 金额」两行块：保证工资/奖金/月均底部对齐。
+  Widget _block(String label, int value) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -257,11 +259,8 @@ class _StatsPageState extends State<StatsPage> {
             style: TextStyle(
                 fontSize: 10.5, color: Colors.white.withOpacity(0.7))),
         const SizedBox(height: 3),
-        Text(displayCents(value), style: moneyStyle(size: 13.5, color: Colors.white)),
-        if (hint != null)
-          Text(hint,
-              style: TextStyle(
-                  fontSize: 9.5, color: Colors.white.withOpacity(0.55))),
+        Text(displayCents(value),
+            style: moneyStyle(size: 13.5, color: Colors.white)),
       ],
     );
   }
@@ -629,11 +628,12 @@ class _StatsPageState extends State<StatsPage> {
       child: Row(
         children: [
           Expanded(
-            child: _miniStat('最高',
-                maxMonth > 0 ? '${maxMonth}月 ${displayCents(maxVal)}' : '—'),
+            child: _miniStat(
+                maxMonth > 0 ? '最高 · $maxMonth月' : '最高',
+                maxMonth > 0 ? displayCents(maxVal) : '—'),
           ),
           Expanded(child: _miniStat('月均', displayCents(avg))),
-          Expanded(child: _miniStat('有记录', '$count 个月')),
+          Expanded(child: _miniStat('有记录', '$count个月')),
         ],
       ),
     );
